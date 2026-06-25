@@ -1,0 +1,19 @@
+# Cangjie build output
+/target/
+*.cjpm
+cjpm.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+*.tmp
+*.bak
+.cache/
