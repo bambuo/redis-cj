@@ -45,6 +45,12 @@ public enum RESPValue <: ToString {
     // -------- RESP3 流式扩展 --------
     /// 流式字符串（分块传输后拼接的完整数据）
     | StreamedString(Blob)
+    /// 流式数组，`*?\r\n...\r\n.\r\n`
+    | StreamedArray(Array<RESPValue>)
+    /// 流式集合，`~?\r\n...\r\n.\r\n`
+    | StreamedSet(Array<RESPValue>)
+    /// 流式映射，`%?\r\n...\r\n.\r\n`
+    | StreamedMap(Array<(RESPValue, RESPValue)>)
     /// 流式聚合终止符 `.`
     | End
 
@@ -106,6 +112,12 @@ public func respValueToString(val: RESPValue): String {
             formatAttr(pairs)
         case RESPValue.StreamedString(blob) =>
             "流式字符串(${blob.size} 字节): ${blob.toDisplay()}"
+        case RESPValue.StreamedArray(items) =>
+            "流式数组(${items.size} 项)"
+        case RESPValue.StreamedSet(items) =>
+            "流式集合(${items.size} 项)"
+        case RESPValue.StreamedMap(pairs) =>
+            "流式映射(${pairs.size} 对)"
         case RESPValue.End => "."
     }
 }

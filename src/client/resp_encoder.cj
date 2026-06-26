@@ -1,5 +1,7 @@
 package redis.client
 import std.collection.*
+import std.convert.*
+import std.unicode.*
 
 /// RESP 编码器（纯函数设计）
 ///
@@ -41,9 +43,11 @@ public class RespEncoder {
 
         match (val) {
             case RESPValue.SimpleString(s) =>
+                validateNoCRLF(s, "SimpleString")
                 append(buf, "+${s}\r\n")
 
             case RESPValue.Error(s) =>
+                validateNoCRLF(s, "Error")
                 append(buf, "-${s}\r\n")
 
             case RESPValue.Integer(n) =>
@@ -76,13 +80,18 @@ public class RespEncoder {
                 if (b) { append(buf, "#t\r\n") } else { append(buf, "#f\r\n") }
 
             case RESPValue.Double(f) =>
-                let str = formatDouble(f)
+                let str = formatDoubleRESP(f)
                 append(buf, ",${str}\r\n")
 
             case RESPValue.BigNumber(s) =>
                 append(buf, "(${s}\r\n")
 
             case RESPValue.VerbatimString(enc, blob) =>
+                if (enc.size != 3) {
+                    throw ProtocolError(
+                        "VerbatimString 编码标识必须恰好为 3 字节，实际为 ${enc.size}"
+                    )
+                }
                 let totalLen = 4 + blob.size  // 3 (enc) + 1 (:) + data
                 append(buf, "=${totalLen}\r\n")
                 append(buf, enc)
@@ -109,6 +118,7 @@ public class RespEncoder {
                 }
 
             case RESPValue.Push(items) =>
+                validatePushFirstElement(items)
                 append(buf, ">${items.size}\r\n")
                 for (item in items) {
                     appendBytes(buf, encodeValue(item))
@@ -141,6 +151,29 @@ public class RespEncoder {
                 }
                 append(buf, ";0\r\n")
 
+            // -------- RESP3 流式聚合 --------
+            case RESPValue.StreamedArray(items) =>
+                append(buf, "*?\r\n")
+                for (item in items) {
+                    appendBytes(buf, encodeValue(item))
+                }
+                append(buf, ".\r\n")
+
+            case RESPValue.StreamedSet(items) =>
+                append(buf, "~?\r\n")
+                for (item in items) {
+                    appendBytes(buf, encodeValue(item))
+                }
+                append(buf, ".\r\n")
+
+            case RESPValue.StreamedMap(pairs) =>
+                append(buf, "%?\r\n")
+                for ((k, v) in pairs) {
+                    appendBytes(buf, encodeValue(k))
+                    appendBytes(buf, encodeValue(v))
+                }
+                append(buf, ".\r\n")
+
             case RESPValue.End =>
                 buf.add(0x2Eu8)  // '.'
                 buf.add(0x0Du8)  // '\r'
@@ -168,14 +201,137 @@ public class RespEncoder {
         }
     }
 
-    /// 格式化双精度值为 RESP 标准格式
-    private static func formatDouble(f: Float64): String {
+    // ====================================================================
+    // 校验辅助
+    // ====================================================================
+
+    /// 校验字符串不包含 CR 或 LF 字符（SimpleString / Error 规范要求）
+    private static func validateNoCRLF(s: String, typeName: String): Unit {
+        if (s.contains("\r") || s.contains("\n")) {
+            throw ProtocolError("${typeName} 不得包含 CR 或 LF 字符")
+        }
+    }
+
+    /// 校验 Push 类型首元素为字符串（规范要求）
+    private static func validatePushFirstElement(items: Array<RESPValue>): Unit {
+        if (items.size == 0) {
+            throw ProtocolError("Push 类型至少需要一个元素（push 类型标识）")
+        }
+        let firstIsString = match (items[0]) {
+            case RESPValue.SimpleString(_) => true
+            case RESPValue.BulkString(Some(_)) => true
+            case _ => false
+        }
+        if (!firstIsString) {
+            throw ProtocolError("Push 类型的第一个元素必须为字符串类型")
+        }
+    }
+
+    // ====================================================================
+    // Double 格式化
+    // ====================================================================
+
+    /// 将 Float64 格式化为 RESP 兼容的字符串表示。
+    ///
+    /// 遵循 RESP3 规范：
+    /// - 禁止指数格式（RESP3 明确"Exponential format is invalid"）
+    /// - 必须有前导零（".5" 不合法，必须为 "0.5"）
+    /// - 特殊值：inf / -inf / nan
+    private static func formatDoubleRESP(f: Float64): String {
         if (f.isInf()) {
             if (f > 0.0) { "inf" } else { "-inf" }
         } else if (f.isNaN()) {
             "nan"
         } else {
-            "${f}"
+            let raw = "${f}"
+            // 检测并展开指数格式
+            let lower = raw.toLower()
+            if (lower.contains("e")) {
+                expandScientific(raw)
+            } else {
+                ensureLeadingZero(raw)
+            }
         }
+    }
+
+    /// 确保小数前导零：".xxx" → "0.xxx"，"-.xxx" → "-0.xxx"
+    private static func ensureLeadingZero(s: String): String {
+        if (s.startsWith(".")) {
+            "0${s}"
+        } else if (s.startsWith("-.")) {
+            "-0${s[2..]}"
+        } else {
+            s
+        }
+    }
+
+    /// 将科学计数法字符串展开为完整小数表示
+    /// 例如 "1.5e-3" → "0.0015"，"-2.5E+4" → "-25000"，"1.23e1" → "12.3"
+    private static func expandScientific(s: String): String {
+        let lower = s.toLower()
+        let eIdx = match (lower.indexOf("e")) {
+            case Some(i) => i
+            case None => return s  // 不应到达此处
+        }
+
+        let mantissa = s[0..eIdx]
+        let expStr = s[eIdx + 1..]
+        let exp = try { Int64.parse(expStr) } catch (_) { return s }
+
+        if (exp == 0) {
+            return ensureLeadingZero(mantissa)
+        }
+
+        // 分离整数部分和小数部分
+        let dotIdx = match (mantissa.indexOf(".")) {
+            case Some(i) => i
+            case None => mantissa.size
+        }
+        let negative = mantissa.startsWith("-")
+
+        // 提取去掉符号和小数点的纯数字串
+        let beforeDot = if (negative) { mantissa[1..dotIdx] } else { mantissa[0..dotIdx] }
+        let afterDot = if (dotIdx < mantissa.size) { mantissa[dotIdx + 1..] } else { "" }
+        let pureDigits = "${beforeDot}${afterDot}"
+
+        let intLen = if (negative) { dotIdx - 1 } else { dotIdx }
+        let prefix = if (negative) { "-" } else { "" }
+
+        if (exp > 0) {
+            // 正指数：小数点右移
+            let newIntLen = intLen + exp
+            let totalLen = pureDigits.size
+            if (newIntLen >= totalLen) {
+                // 末尾补零：如 1.5e3 → "1500"
+                let zeros = buildCharString(0x30u8, newIntLen - totalLen)  // '0'
+                "${prefix}${pureDigits}${zeros}"
+            } else {
+                // 小数点在数字中间：如 1.23e1 → "12.3"
+                "${prefix}${pureDigits[0..newIntLen]}.${pureDigits[newIntLen..]}"
+            }
+        } else {
+            // 负指数：小数点左移
+            let absExp = -exp
+            let leadingZeros = absExp - intLen
+            if (leadingZeros >= 0) {
+                // 需要前导零：如 1.5e-3 → "0.0015"
+                let zeros = buildCharString(0x30u8, leadingZeros)
+                "${prefix}0.${zeros}${pureDigits}"
+            } else {
+                // 小数点在原数字内部：如 123.4e-1 → "12.34"
+                let pointPos = intLen + exp  // exp is negative
+                "${prefix}${pureDigits[0..pointPos]}.${pureDigits[pointPos..]}"
+            }
+        }
+    }
+
+    /// 用指定字节重复构建字符串
+    private static func buildCharString(ch: Byte, count: Int64): String {
+        if (count <= 0) { return "" }
+        let buf = ArrayList<Byte>()
+        for (_ in 0..count) {
+            buf.add(ch)
+        }
+        String.fromUtf8(collectArray(buf.iterator()))
     }
 }

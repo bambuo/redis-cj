@@ -285,6 +285,61 @@ class DecoderTests {
         }
     }
 
+    /// 解码流式数组 *?\r\n...\r\n.\r\n
+    @TestCase
+    func decodeStreamedArray() {
+        let data = Blob.fromUtf8("*?\r\n:1\r\n:2\r\n.\r\n").toBytes()
+        let dec = decoderFromBytes(data)
+        let val = dec.readValue()
+        match (val) {
+            case RESPValue.Array(Some(items)) =>
+                @Expect(items.size, 2)
+                match (items[0]) {
+                    case RESPValue.Integer(n) => @Expect(n, 1)
+                    case _ => @Fail("期望 Integer(1)")
+                }
+                match (items[1]) {
+                    case RESPValue.Integer(n) => @Expect(n, 2)
+                    case _ => @Fail("期望 Integer(2)")
+                }
+            case _ => @Fail("期望流式数组 → Array")
+        }
+    }
+
+    /// 解码流式集合 ~?\r\n...\r\n.\r\n
+    @TestCase
+    func decodeStreamedSet() {
+        let data = Blob.fromUtf8("~?\r\n+a\r\n+b\r\n.\r\n").toBytes()
+        let dec = decoderFromBytes(data)
+        let val = dec.readValue()
+        match (val) {
+            case RESPValue.Set(items) =>
+                @Expect(items.size, 2)
+            case _ => @Fail("期望流式集合 → Set")
+        }
+    }
+
+    /// 解码流式映射 %?\r\n...\r\n.\r\n
+    @TestCase
+    func decodeStreamedMap() {
+        let data = Blob.fromUtf8("%?\r\n+k1\r\n:1\r\n+k2\r\n:2\r\n.\r\n").toBytes()
+        let dec = decoderFromBytes(data)
+        let val = dec.readValue()
+        match (val) {
+            case RESPValue.Map(pairs) =>
+                @Expect(pairs.size, 2)
+            case _ => @Fail("期望流式映射 → Map")
+        }
+    }
+
+    /// 解码流式映射元素非偶数应抛异常
+    @TestCase
+    func decodeStreamedMapOddElements() {
+        let data = Blob.fromUtf8("%?\r\n+k1\r\n:1\r\n+k2\r\n.\r\n").toBytes()
+        let dec = decoderFromBytes(data)
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
     @TestCase
     func readValueSkipsPush() {
         let data = Blob.fromUtf8(">3\r\n+message\r\n+ch\r\n+hello\r\n+OK\r\n").toBytes()

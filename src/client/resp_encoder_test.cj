@@ -205,4 +205,150 @@ class EncoderTests {
         @Expect(str.endsWith("\r\n"), true)
         @Expect(str.contains("3.14"), true)
     }
+
+    /// 编码 Double 前导零：0.5 → ",0.5\r\n"（非 ",.5\r\n"）
+    @TestCase
+    func encodeDoubleLeadingZero() {
+        let val = RESPValue.Double(0.5)
+        let encoded = RespEncoder.encodeValue(val)
+        let str = String.fromUtf8(encoded)
+        @Expect(str.startsWith(",0.5"), true)
+        // 负小数同理
+        let neg = RESPValue.Double(-0.5)
+        let negStr = String.fromUtf8(RespEncoder.encodeValue(neg))
+        @Expect(negStr.startsWith(",-0.5"), true)
+    }
+
+    /// 编码 Double 特殊值：inf / -inf / nan
+    @TestCase
+    func encodeDoubleSpecialValues() {
+        let infEncoded = String.fromUtf8(RespEncoder.encodeValue(RESPValue.Double(Float64.Inf)))
+        @Expect(infEncoded, ",inf\r\n")
+
+        let negInfEncoded = String.fromUtf8(RespEncoder.encodeValue(RESPValue.Double(-Float64.Inf)))
+        @Expect(negInfEncoded, ",-inf\r\n")
+
+        let nanEncoded = String.fromUtf8(RespEncoder.encodeValue(RESPValue.Double(Float64.NaN)))
+        @Expect(nanEncoded, ",nan\r\n")
+    }
+
+    /// 编码 Double 不产生指数格式（RESP3 禁止）
+    @TestCase
+    func encodeDoubleNoExponential() {
+        // 极小值
+        let tiny = RESPValue.Double(0.000000000000001)
+        let tinyStr = String.fromUtf8(RespEncoder.encodeValue(tiny))
+        @Expect(tinyStr.contains("e") || tinyStr.contains("E"), false)
+
+        // 极大值
+        let huge = RESPValue.Double(1000000000000000.0)
+        let hugeStr = String.fromUtf8(RespEncoder.encodeValue(huge))
+        @Expect(hugeStr.contains("e") || hugeStr.contains("E"), false)
+    }
+
+    // -------- 校验测试 --------
+
+    /// 编码 SimpleString 含 CR 应抛异常
+    @TestCase
+    func encodeSimpleStringWithCRThrows() {
+        let val = RESPValue.SimpleString("hello\rworld")
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 编码 SimpleString 含 LF 应抛异常
+    @TestCase
+    func encodeSimpleStringWithLFThrows() {
+        let val = RESPValue.SimpleString("hello\nworld")
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 编码 Error 含 CRLF 应抛异常
+    @TestCase
+    func encodeErrorWithCRLFThrows() {
+        let val = RESPValue.Error("ERR bad\r\nthing")
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 编码 VerbatimString 编码标识不足 3 字节应抛异常
+    @TestCase
+    func encodeVerbatimStringInvalidEncodingThrows() {
+        let val = RESPValue.VerbatimString("ab", Blob.fromUtf8("data"))
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 编码 VerbatimString 编码标识超过 3 字节应抛异常
+    @TestCase
+    func encodeVerbatimStringEncodingTooLong() {
+        let val = RESPValue.VerbatimString("text", Blob.fromUtf8("data"))
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 编码 Push 首元素非字符串应抛异常
+    @TestCase
+    func encodePushInvalidFirstElementThrows() {
+        // 首元素为 Integer（应抛异常）
+        let val = RESPValue.Push([
+            RESPValue.Integer(1),
+            RESPValue.SimpleString("hello"),
+        ])
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 编码空 Push 应抛异常
+    @TestCase
+    func encodeEmptyPushThrows() {
+        let val = RESPValue.Push([])
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    // -------- 流式聚合编码 --------
+
+    /// 编码流式数组
+    @TestCase
+    func encodeStreamedArray() {
+        let val = RESPValue.StreamedArray([
+            RESPValue.SimpleString("a"),
+            RESPValue.SimpleString("b"),
+        ])
+        let encoded = String.fromUtf8(RespEncoder.encodeValue(val))
+        @Expect(encoded.startsWith("*?\r\n"), true)
+        @Expect(encoded.endsWith(".\r\n"), true)
+        @Expect(encoded.contains("+a\r\n"), true)
+        @Expect(encoded.contains("+b\r\n"), true)
+    }
+
+    /// 编码流式集合
+    @TestCase
+    func encodeStreamedSet() {
+        let val = RESPValue.StreamedSet([
+            RESPValue.SimpleString("x"),
+            RESPValue.SimpleString("y"),
+        ])
+        let encoded = String.fromUtf8(RespEncoder.encodeValue(val))
+        @Expect(encoded.startsWith("~?\r\n"), true)
+        @Expect(encoded.endsWith(".\r\n"), true)
+    }
+
+    /// 编码流式映射
+    @TestCase
+    func encodeStreamedMap() {
+        let val = RESPValue.StreamedMap([
+            (RESPValue.SimpleString("key"), RESPValue.Integer(1)),
+        ])
+        let encoded = String.fromUtf8(RespEncoder.encodeValue(val))
+        @Expect(encoded.startsWith("%?\r\n"), true)
+        @Expect(encoded.endsWith(".\r\n"), true)
+    }
+
+    /// 编码常规 VerbatimString（正常情况）
+    @TestCase
+    func encodeVerbatimString() {
+        let val = RESPValue.VerbatimString("txt", Blob.fromUtf8("Some string"))
+        let encoded = RespEncoder.encodeValue(val)
+        let expected = Blob.fromUtf8("=15\r\ntxt:Some string\r\n").toBytes()
+        @Expect(encoded.size, expected.size)
+        for (i in 0..encoded.size) {
+            @Expect(encoded[i], expected[i])
+        }
+    }
 }
