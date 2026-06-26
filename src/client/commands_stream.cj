@@ -12,17 +12,28 @@ extend RedisClient {
     public func xadd(key: String, fields: Array<(String, Blob)>,
                      id!: String = "*",
                      maxLen!: Option<Int64> = None,
+                     minId!: Option<String> = None,
                      approx!: Bool = false,
-                     nomkstream!: Bool = false): Blob {
+                     nomkstream!: Bool = false,
+                     limit!: Option<Int64> = None): Blob {
         let args = ArrayList<Blob>()
         args.add(Blob.fromUtf8("XADD")); args.add(Blob.fromUtf8(key))
         if (nomkstream) { args.add(Blob.fromUtf8("NOMKSTREAM")) }
-        match (maxLen) {
-            case Some(n) =>
-                args.add(Blob.fromUtf8("MAXLEN"))
-                if (approx) { args.add(Blob.fromUtf8("~")) }
-                args.add(Blob.fromUtf8("${n}"))
-            case None => ()
+        match (minId) {
+            case Some(idVal) =>
+                args.add(Blob.fromUtf8("MINID"))
+                args.add(Blob.fromUtf8(if (approx) { "~" } else { "=" }))
+                args.add(Blob.fromUtf8(idVal))
+                match (limit) { case Some(l) => args.add(Blob.fromUtf8("LIMIT")); args.add(Blob.fromUtf8("${l}")) case None => () }
+            case None =>
+                match (maxLen) {
+                    case Some(n) =>
+                        args.add(Blob.fromUtf8("MAXLEN"))
+                        args.add(Blob.fromUtf8(if (approx) { "~" } else { "=" }))
+                        args.add(Blob.fromUtf8("${n}"))
+                        match (limit) { case Some(l) => args.add(Blob.fromUtf8("LIMIT")); args.add(Blob.fromUtf8("${l}")) case None => () }
+                    case None => ()
+                }
         }
         args.add(Blob.fromUtf8(id))
         for ((f, v) in fields) { args.add(Blob.fromUtf8(f)); args.add(v) }
@@ -199,6 +210,13 @@ extend RedisClient {
         parseMapResp(resp)
     }
 
+    /// 获取完整流信息（Redis 6.0+ FULL，COUNT 用于限制返回的 PEL/entries 数量）。
+    public func xinfoStreamFull(key: String, count!: Option<Int64> = None): HashMap<String, RESPValue> {
+        let args = ArrayList<String>(); args.add("XINFO"); args.add("STREAM"); args.add(key); args.add("FULL")
+        match (count) { case Some(n) => args.add("COUNT"); args.add("${n}") case None => () }
+        parseMapResp(executeString(collectArray(args.iterator())))
+    }
+
     /// 获取消费者组列表
     public func xinfoGroups(key: String): Array<HashMap<String, RESPValue>> {
         let resp = executeString(["XINFO", "GROUPS", key])
@@ -215,9 +233,11 @@ extend RedisClient {
 
     /// 获取待处理消息列表
     public func xpending(key: String, group: String, start!: String = "-", end!: String = "+",
-                         count!: Int64 = 10, consumer!: Option<String> = None): Array<RESPValue> {
+                         count!: Int64 = 10, consumer!: Option<String> = None,
+                         idle!: Option<Int64> = None): Array<RESPValue> {
         let args = ArrayList<String>(); args.add("XPENDING"); args.add(key); args.add(group)
         // 详细模式需要 start/end/count
+        match (idle) { case Some(ms) => args.add("IDLE"); args.add("${ms}") case None => () }
         args.add(start); args.add(end); args.add("${count}")
         match (consumer) { case Some(c) => args.add(c) case None => () }
         let resp = executeString(collectArray(args.iterator()))
@@ -289,6 +309,23 @@ extend RedisClient {
     public func xautoclaim(key: String, group: String, consumer: String,
                            minIdleTime: Int64, start!: String = "0-0",
                            count!: Option<Int64> = None, justId!: Bool = false): (String, Array<RESPValue>) {
+        let (nextStart, messages, _) = xautoclaimWithDeleted(
+            key,
+            group,
+            consumer,
+            minIdleTime,
+            start: start,
+            count: count,
+            justId: justId
+        )
+        (nextStart, messages)
+    }
+
+    /// 自动认领超时消息，并返回 Redis 7.0+ 的已删除消息 ID 列表。
+    public func xautoclaimWithDeleted(key: String, group: String, consumer: String,
+                                      minIdleTime: Int64, start!: String = "0-0",
+                                      count!: Option<Int64> = None,
+                                      justId!: Bool = false): (String, Array<RESPValue>, Array<String>) {
         let args = ArrayList<Blob>()
         args.add(Blob.fromUtf8("XAUTOCLAIM")); args.add(Blob.fromUtf8(key))
         args.add(Blob.fromUtf8(group)); args.add(Blob.fromUtf8(consumer))
@@ -305,8 +342,16 @@ extend RedisClient {
                         case RESPValue.Array(Some(m)) => m
                         case _ => Array<RESPValue>()
                     }
-                    (nextStart, msgs)
-                } else { ("0-0", Array<RESPValue>()) }
+                    let deletedIds = if (items.size >= 3) {
+                        match (items[2]) {
+                            case RESPValue.Array(Some(ids)) => extractStringArray(ids)
+                            case _ => Array<String>()
+                        }
+                    } else {
+                        Array<String>()
+                    }
+                    (nextStart, msgs, deletedIds)
+                } else { ("0-0", Array<RESPValue>(), Array<String>()) }
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("XAUTOCLAIM 返回意外类型")
         }

@@ -79,6 +79,11 @@ extend RedisClient {
         }
     }
 
+    /// 从集合中获取一个随机成员（不移除）。
+    public func srandmemberOne(key: String): Option<Blob> {
+        expectBlob(executeString(["SRANDMEMBER", key]), "SRANDMEMBER")
+    }
+
     // -------- 集合运算 --------
 
     /// 返回多个集合的差集

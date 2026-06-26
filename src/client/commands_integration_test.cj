@@ -201,6 +201,18 @@ class CommandIntegrationTests {
         @Expect(members.size, 2)
     }
 
+    @TestCase
+    func testSRandMemberOne() {
+        let c = createClient()
+        let k = uniqueKey("srm1")
+        c.sadd(k, [Blob.fromUtf8("a")])
+        let member = c.srandmemberOne(k)
+        match (member) {
+            case Some(v) => @Expect(v.toUtf8(), "a")
+            case None => @Fail("SRANDMEMBER one failed")
+        }
+    }
+
     // -------- 哈希命令 --------
 
     @TestCase
@@ -227,6 +239,21 @@ class CommandIntegrationTests {
         let k = uniqueKey("hibf")
         let n = c.hincrByFloat(k, "f", 2.5)
         @Expect(n > 2.49 && n < 2.51, true)
+    }
+
+    @TestCase
+    func testHRandFieldShapes() {
+        let c = createClient()
+        let k = uniqueKey("hrf")
+        c.hset(k, "f1", Blob.fromUtf8("v1"))
+        c.hset(k, "f2", Blob.fromUtf8("v2"))
+        let one = c.hrandfieldOne(k)
+        match (one) {
+            case Some(f) => @Expect(f == "f1" || f == "f2", true)
+            case None => @Fail("HRANDFIELD one failed")
+        }
+        @Expect(c.hrandfieldValues(k, 2).size, 2)
+        @Expect(c.hrandfield(k, 2, withValues: true).size, 2)
     }
 
     // -------- 有序集合命令 --------
@@ -282,6 +309,22 @@ class CommandIntegrationTests {
         }
     }
 
+    @TestCase
+    func testZRandMemberWithScoresAndZmPop() {
+        let c = createClient()
+        let k = uniqueKey("zmp")
+        c.zadd(k, [(1.0, Blob.fromUtf8("a")), (2.0, Blob.fromUtf8("b")), (3.0, Blob.fromUtf8("c"))])
+        let random = c.zrandmemberWithScores(k, 2)
+        @Expect(random.size, 2)
+        let popped = c.zmpop([k], min: false, count: Some(2))
+        match (popped) {
+            case Some((key, values)) =>
+                @Expect(key, k)
+                @Expect(values.size, 2)
+            case None => @Fail("ZMPOP failed")
+        }
+    }
+
     // -------- 流命令 --------
 
     @TestCase
@@ -301,6 +344,37 @@ class CommandIntegrationTests {
         c.executeString(["XGROUP", "CREATE", k, "mygroup", "0"])
         let groups = c.xinfoGroups(k)
         @Expect(groups.size > 0, true)
+    }
+
+    @TestCase
+    func testStreamTrimInfoAndAutoClaimDeletedShape() {
+        let c = createClient()
+        let k = uniqueKey("xfull")
+        let group = uniqueKey("g")
+        c.xadd(k, [("f", Blob.fromUtf8("v1"))], id: "1-0")
+        c.xadd(k, [("f", Blob.fromUtf8("v2"))], id: "2-0")
+        c.xadd(k, [("f", Blob.fromUtf8("v3"))], id: "3-0", minId: Some("2-0"))
+        let entries = c.xrange(k)
+        @Expect(entries.size <= 2, true)
+        let info = c.xinfoStreamFull(k, count: Some(1))
+        @Expect(info.size > 0, true)
+
+        c.xgroupCreate(k, group, id: "0")
+        let messages = c.xreadgroup(group, "c1", [(k, ">")], count: Some(1))
+        @Expect(messages.size, 1)
+        let pending = c.xpending(k, group, idle: Some(0))
+        @Expect(pending.size >= 1, true)
+        let (nextStart, claimed, deleted) = c.xautoclaimWithDeleted(
+            k,
+            group,
+            "c2",
+            0,
+            start: "0-0",
+            count: Some(10)
+        )
+        @Expect(nextStart.size > 0, true)
+        @Expect(claimed.size >= 1, true)
+        @Expect(deleted.size >= 0, true)
     }
 
     // -------- 服务器命令 --------
@@ -505,6 +579,8 @@ class CommandIntegrationTests {
         let exists = c.scriptExists([sha])
         @Expect(exists.size, 1)
         @Expect(exists[0], true)
+        c.scriptFlush(mode: Some("SYNC"))
+        @Expect(c.scriptExists([sha])[0], false)
     }
 
     @TestCase

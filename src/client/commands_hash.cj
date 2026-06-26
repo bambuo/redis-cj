@@ -167,6 +167,29 @@ extend RedisClient {
 
     // -------- 新增 --------
 
+    /// 随机获取一个哈希字段。
+    public func hrandfieldOne(key: String): Option<String> {
+        let resp = executeString(["HRANDFIELD", key])
+        match (resp) {
+            case RESPValue.BulkString(Some(blob)) => Some(blob.toUtf8())
+            case RESPValue.BulkString(None) | RESPValue.Null => None
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("HRANDFIELD 返回意外类型")
+        }
+    }
+
+    /// 随机获取哈希字段列表（不返回值）。
+    public func hrandfieldValues(key: String, count: Int64): Array<String> {
+        let resp = executeString(["HRANDFIELD", key, "${count}"])
+        match (resp) {
+            case RESPValue.Array(Some(items)) => extractStringArray(items)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("HRANDFIELD 返回意外类型")
+        }
+    }
+
     /// 随机获取哈希表中的字段及值（需要 count 参数）
     public func hrandfield(key: String, count: Int64, withValues!: Bool = true): Array<(String, Blob)> {
         let args = ArrayList<String>(); args.add("HRANDFIELD"); args.add(key)
@@ -194,13 +217,31 @@ extend RedisClient {
     /// 从 RESP2 扁平数组中解析字段值对 [f1, v1, f2, v2, ...]
     private func parseFieldValuePairs(items: Array<RESPValue>): Array<(String, Blob)> {
         let result = ArrayList<(String, Blob)>()
-        var i: Int64 = 0
-        while (i + 1 < items.size) {
-            match ((asString(items[i]), asBlob(items[i + 1]))) {
-                case (Some(f), Some(v)) => result.add((f, v))
-                case _ => ()
+        if (items.size > 0) {
+            match (items[0]) {
+                case RESPValue.Array(_) =>
+                    for (item in items) {
+                        match (item) {
+                            case RESPValue.Array(Some(pair)) =>
+                                if (pair.size >= 2) {
+                                    match ((asString(pair[0]), asBlob(pair[1]))) {
+                                        case (Some(f), Some(v)) => result.add((f, v))
+                                        case _ => ()
+                                    }
+                                }
+                            case _ => ()
+                        }
+                    }
+                case _ =>
+                    var i: Int64 = 0
+                    while (i + 1 < items.size) {
+                        match ((asString(items[i]), asBlob(items[i + 1]))) {
+                            case (Some(f), Some(v)) => result.add((f, v))
+                            case _ => ()
+                        }
+                        i += 2
+                    }
             }
-            i += 2
         }
         collectArray(result.iterator())
     }

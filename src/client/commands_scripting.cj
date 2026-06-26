@@ -53,8 +53,10 @@ extend RedisClient {
     }
 
     /// 清空脚本缓存
-    public func scriptFlush(): Unit {
-        let resp = executeString(["SCRIPT", "FLUSH"])
+    public func scriptFlush(mode!: Option<String> = None): Unit {
+        let args = ArrayList<String>(); args.add("SCRIPT"); args.add("FLUSH")
+        match (mode) { case Some(m) => args.add(m) case None => () }
+        let resp = executeString(collectArray(args.iterator()))
         expectOK(resp, "SCRIPT FLUSH")
     }
 

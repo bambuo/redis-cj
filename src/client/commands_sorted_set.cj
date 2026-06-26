@@ -260,6 +260,26 @@ extend RedisClient {
         parseBlockingPopResult(executeString(collectArray(args.iterator())))
     }
 
+    /// 从多个有序集合弹出最小/最大分值成员（Redis 7.0+）。
+    public func zmpop(keys: Array<String>, min!: Bool = true,
+                      count!: Option<Int64> = None): Option<(String, Array<(Blob, Float64)>)> {
+        let args = ArrayList<String>(); args.add("ZMPOP"); args.add("${keys.size}")
+        for (k in keys) { args.add(k) }
+        args.add(if (min) { "MIN" } else { "MAX" })
+        match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
+        parseZMultiPopResult(executeString(collectArray(args.iterator())), "ZMPOP")
+    }
+
+    /// 阻塞式从多个有序集合弹出最小/最大分值成员（Redis 7.0+）。
+    public func bzmpop(timeout: Float64, keys: Array<String>, min!: Bool = true,
+                       count!: Option<Int64> = None): Option<(String, Array<(Blob, Float64)>)> {
+        let args = ArrayList<String>(); args.add("BZMPOP"); args.add("${timeout}"); args.add("${keys.size}")
+        for (k in keys) { args.add(k) }
+        args.add(if (min) { "MIN" } else { "MAX" })
+        match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
+        parseZMultiPopResult(executeString(collectArray(args.iterator())), "BZMPOP")
+    }
+
     // -------- 集合运算 --------
 
     /// 计算多个有序集合的差集
@@ -363,6 +383,12 @@ extend RedisClient {
         }
     }
 
+    /// 随机获取成员及分值。
+    public func zrandmemberWithScores(key: String, count: Int64): Array<(Blob, Float64)> {
+        let resp = executeString(["ZRANDMEMBER", key, "${count}", "WITHSCORES"])
+        parseScorePairs(resp)
+    }
+
     /// 计算交集基数
     public func zintercard(keys: Array<String>, limit!: Option<Int64> = None): Int64 {
         let args = ArrayList<String>(); args.add("ZINTERCARD"); args.add("${keys.size}")
@@ -381,16 +407,16 @@ extend RedisClient {
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("ZSET 返回意外类型")
         }
-        parseScorePairsFromFlatArray(items)
+        parseScorePairsFromArray(items)
     }
 
     private func parseScorePairsFromFlatArray(items: Array<RESPValue>): Array<(Blob, Float64)> {
         let result = ArrayList<(Blob, Float64)>()
         var i: Int64 = 0
         while (i + 1 < items.size) {
-            match ((asBlob(items[i]), asString(items[i + 1]))) {
+            match ((asBlob(items[i]), parseScoreValue(items[i + 1]))) {
                 case (Some(m), Some(s)) =>
-                    try { result.add((m, Float64.parse(s))) } catch (_) { () }
+                    result.add((m, s))
                 case _ => ()
             }
             i += 2
@@ -411,6 +437,71 @@ extend RedisClient {
             case RESPValue.Array(None) => None
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("BZPOP 返回意外类型")
+        }
+    }
+
+    private func parseZMultiPopResult(resp: RESPValue, cmd: String): Option<(String, Array<(Blob, Float64)>)> {
+        match (resp) {
+            case RESPValue.Array(Some(items)) =>
+                if (items.size >= 2) {
+                    let key = asString(items[0])
+                    let members = match (items[1]) {
+                        case RESPValue.Array(Some(values)) => parseScorePairsFromArray(values)
+                        case _ => Array<(Blob, Float64)>()
+                    }
+                    match (key) {
+                        case Some(k) => Some((k, members))
+                        case None => None
+                    }
+                } else {
+                    None
+                }
+            case RESPValue.Null | RESPValue.Array(None) => None
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("${cmd} 返回意外类型")
+        }
+    }
+
+    private func parseScorePairsFromArray(items: Array<RESPValue>): Array<(Blob, Float64)> {
+        if (items.size == 0) {
+            Array<(Blob, Float64)>()
+        } else {
+            match (items[0]) {
+                case RESPValue.Array(_) => parseScorePairsFromNestedArray(items)
+                case _ => parseScorePairsFromFlatArray(items)
+            }
+        }
+    }
+
+    private func parseScorePairsFromNestedArray(items: Array<RESPValue>): Array<(Blob, Float64)> {
+        let result = ArrayList<(Blob, Float64)>()
+        for (item in items) {
+            match (item) {
+                case RESPValue.Array(Some(pair)) =>
+                    if (pair.size >= 2) {
+                        match ((asBlob(pair[0]), parseScoreValue(pair[1]))) {
+                            case (Some(member), Some(score)) =>
+                                result.add((member, score))
+                            case _ => ()
+                        }
+                    }
+                case _ => ()
+            }
+        }
+        collectArray(result.iterator())
+    }
+
+    private func parseScoreValue(resp: RESPValue): Option<Float64> {
+        match (resp) {
+            case RESPValue.Double(f) => Some(f)
+            case RESPValue.Integer(n) => Some(Float64(n))
+            case _ =>
+                match (asString(resp)) {
+                    case Some(s) =>
+                        try { Some(Float64.parse(s)) } catch (_) { None }
+                    case None => None
+                }
         }
     }
 }
