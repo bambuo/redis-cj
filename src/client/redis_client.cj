@@ -1,5 +1,6 @@
 package redis.client
 import std.collection.*
+import stdx.net.tls.*
 
 /// Redis 客户端门面（Facade 模式）
 ///
@@ -47,6 +48,29 @@ public class RedisClient <: Resource {
     /// 使用已有的连接创建客户端
     public init(connection: RedisConnection) {
         this.connection = connection
+    }
+
+    /// 创建到 Redis 服务器的 TLS 加密连接（静态工厂）
+    ///
+    /// @param host 服务器主机名（用于 SNI 和证书验证）
+    /// @param port Redis TLS 端口（通常为 6380）
+    /// @param tlsConfig TLS 客户端配置（默认使用系统 CA 验证）
+    /// @param autoHello 是否自动 HELLO 协商
+    /// @param connectTimeout 连接超时
+    /// @return 已连接的 RedisClient 实例
+    /// @throws ConnectionError TLS 握手或连接失败时
+    public static func withTls(host: String, port: UInt16,
+                               tlsConfig!: TlsClientConfig = TlsClientConfig(),
+                               autoHello!: Bool = true,
+                               connectTimeout!: Option<Duration> = None): RedisClient {
+        let transport = TlsTransport(host, port, tlsConfig: tlsConfig)
+        let conn = RedisConnection(
+            transport,
+            autoHello: autoHello,
+            connectTimeout: connectTimeout
+        )
+        conn.connect()
+        RedisClient(conn)
     }
 
     // ====================================================================
