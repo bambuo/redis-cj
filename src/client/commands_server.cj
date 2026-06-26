@@ -45,8 +45,19 @@ extend RedisClient {
 
     // -------- CLIENT 管理 --------
 
-    public func clientList(): String {
-        expectBlobVal(executeString(["CLIENT", "LIST"]), "CLIENT LIST").toUtf8()
+    public func clientList(typeFilter!: Option<String> = None, ids!: Array<Int64> = []): String {
+        let args = ArrayList<String>(); args.add("CLIENT"); args.add("LIST")
+        match (typeFilter) {
+            case Some(t) =>
+                args.add("TYPE")
+                args.add(t)
+            case None => ()
+        }
+        if (ids.size > 0) {
+            args.add("ID")
+            for (id in ids) { args.add("${id}") }
+        }
+        expectText(executeString(collectArray(args.iterator())), "CLIENT LIST")
     }
 
     public func clientHelp(): Array<String> {
@@ -341,6 +352,60 @@ extend RedisClient {
         expectStringArray(executeString(["CLUSTER", "HELP"]), "CLUSTER HELP")
     }
 
+    public func clusterSlots(): Array<RESPValue> {
+        match (executeString(["CLUSTER", "SLOTS"])) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("CLUSTER SLOTS 返回意外类型")
+        }
+    }
+
+    public func clusterNodes(): String {
+        expectText(executeString(["CLUSTER", "NODES"]), "CLUSTER NODES")
+    }
+
+    public func clusterInfo(): String {
+        expectText(executeString(["CLUSTER", "INFO"]), "CLUSTER INFO")
+    }
+
+    public func clusterKeyslot(key: String): Int64 {
+        expectInt(executeString(["CLUSTER", "KEYSLOT", key]), "CLUSTER KEYSLOT")
+    }
+
+    public func clusterCountKeysinslot(slot: Int64): Int64 {
+        expectInt(executeString(["CLUSTER", "COUNTKEYSINSLOT", "${slot}"]), "CLUSTER COUNTKEYSINSLOT")
+    }
+
+    public func clusterGetkeysinslot(slot: Int64, count: Int64): Array<String> {
+        match (executeString(["CLUSTER", "GETKEYSINSLOT", "${slot}", "${count}"])) {
+            case RESPValue.Array(Some(items)) => extractStringArray(items)
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("CLUSTER GETKEYSINSLOT 返回意外类型")
+        }
+    }
+
+    public func clusterMyId(): String {
+        expectText(executeString(["CLUSTER", "MYID"]), "CLUSTER MYID")
+    }
+
+    public func clusterMyShardId(): String {
+        expectText(executeString(["CLUSTER", "MYSHARDID"]), "CLUSTER MYSHARDID")
+    }
+
+    public func clusterLinks(): Array<RESPValue> {
+        match (executeString(["CLUSTER", "LINKS"])) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("CLUSTER LINKS 返回意外类型")
+        }
+    }
+
     // -------- MEMORY --------
 
     /// 获取键的内存使用量（字节）
@@ -380,6 +445,22 @@ extend RedisClient {
 
     public func memoryHelp(): Array<String> {
         expectStringArray(executeString(["MEMORY", "HELP"]), "MEMORY HELP")
+    }
+
+    // -------- MODULE --------
+
+    public func moduleList(): Array<RESPValue> {
+        match (executeString(["MODULE", "LIST"])) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("MODULE LIST 返回意外类型")
+        }
+    }
+
+    public func moduleHelp(): Array<String> {
+        expectStringArray(executeString(["MODULE", "HELP"]), "MODULE HELP")
     }
 
     // -------- ACL --------

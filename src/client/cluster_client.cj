@@ -279,6 +279,18 @@ extend ClusterClient {
         expectBlobVal(resp, "CLUSTER INFO").toUtf8()
     }
 
+    /// 获取集群槽位拓扑
+    public func clusterSlots(): Array<RESPValue> {
+        let resp = execute(stringsToBlobs(["CLUSTER", "SLOTS"]))
+        match (resp) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("CLUSTER SLOTS 返回意外类型")
+        }
+    }
+
     /// 获取集群分片拓扑（Redis 7.0+）
     public func clusterShards(): Array<RESPValue> {
         let resp = execute(stringsToBlobs(["CLUSTER", "SHARDS"]))
@@ -288,6 +300,28 @@ extend ClusterClient {
             case RESPValue.Error(e) => throw createCommandError(e)
             case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
             case _ => throw ProtocolError("CLUSTER SHARDS 返回意外类型")
+        }
+    }
+
+    /// 获取当前节点 ID
+    public func clusterMyId(): String {
+        expectBlobVal(execute(stringsToBlobs(["CLUSTER", "MYID"])), "CLUSTER MYID").toUtf8()
+    }
+
+    /// 获取当前节点所在分片 ID（Redis 7.2+）
+    public func clusterMyShardId(): String {
+        expectBlobVal(execute(stringsToBlobs(["CLUSTER", "MYSHARDID"])), "CLUSTER MYSHARDID").toUtf8()
+    }
+
+    /// 获取集群连接链接信息
+    public func clusterLinks(): Array<RESPValue> {
+        let resp = execute(stringsToBlobs(["CLUSTER", "LINKS"]))
+        match (resp) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("CLUSTER LINKS 返回意外类型")
         }
     }
 

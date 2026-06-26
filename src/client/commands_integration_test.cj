@@ -487,6 +487,15 @@ class CommandIntegrationTests {
         @Expect(c.objectHelp().size > 0, true)
         @Expect(c.scriptHelp().size > 0, true)
         @Expect(c.functionHelp().size > 0, true)
+        @Expect(c.moduleHelp().size > 0, true)
+    }
+
+    @TestCase
+    func testClientListFilterAndModuleList() {
+        let c = createClient()
+        let id = c.clientId()
+        @Expect(c.clientList(ids: [id]).size > 0, true)
+        @Expect(c.moduleList().size >= 0, true)
     }
 
     @TestCase
