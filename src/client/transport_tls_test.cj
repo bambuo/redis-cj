@@ -1,6 +1,7 @@
 package redis.client
 import std.time.*
 import stdx.net.tls.*
+import stdx.net.tls.common.CertificateVerifyMode
 
 /// TlsTransport 单元测试
 ///
@@ -154,12 +155,22 @@ class TlsTransportTests {
     // TlsClientConfig 自定义
     // ====================================================================
 
-    /// 传入默认 TlsClientConfig 构造不抛异常
+    /// 传入默认 TlsClientConfig（Default 验证模式）
     @TestCase
     func defaultTlsConfig() {
         let config = TlsClientConfig()
         let t = TlsTransport("127.0.0.1", 6380u16, tlsConfig: config)
         @Expect(t.remoteAddress(), "127.0.0.1:6380")
+    }
+
+    /// 传入 TrustAll 模式构造不抛异常
+    @TestCase
+    func trustAllConfig() {
+        var config = TlsClientConfig()
+        config.verifyMode = CertificateVerifyMode.TrustAll
+        let t = TlsTransport("127.0.0.1", 6380u16, tlsConfig: config)
+        @Expect(t.remoteAddress(), "127.0.0.1:6380")
+        @Expect(t.isConnected(), false)
     }
 
     /// 省略 tlsConfig 参数使用默认值不抛异常
