@@ -117,4 +117,13 @@ public class RedisClient <: Resource {
     public func getProtocolVersion(): Int64 {
         connection.getProtocolVersion()
     }
+
+    /// 获取最后一次命令执行的 RESP3 属性数据
+    ///
+    /// 某些 Redis 命令会在主响应前附加属性元数据（如 key 的流行度、TTL 等）。
+    /// 调用此方法可在执行命令后获取这些附加属性。
+    /// 属性会在下一次命令执行前被覆盖。
+    public func getAttributes(): Option<Array<(RESPValue, RESPValue)>> {
+        connection.getAttributes()
+    }
 }

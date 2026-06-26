@@ -17,6 +17,7 @@ public class RedisConnection <: Resource {
     private var protoVersion: Int64
     private var connectTimeout: Option<Duration>
     private var autoHello: Bool
+    private var lastAttributes: Option<Array<(RESPValue, RESPValue)>>
     private let lock: Mutex
 
     public init(transport: Transport,
@@ -28,6 +29,7 @@ public class RedisConnection <: Resource {
         this.protoVersion = 2
         this.autoHello = autoHello
         this.connectTimeout = connectTimeout
+        this.lastAttributes = None
         this.lock = Mutex()
     }
 
@@ -180,6 +182,8 @@ public class RedisConnection <: Resource {
             decoder.readValue()
         }
         decoder.compact()
+        // 保存并清除属性，确保未丢失 RESP3 属性数据
+        lastAttributes = decoder.getAttributes()
         decoder.clearAttributes()
         resp
     }
@@ -215,6 +219,7 @@ public class RedisConnection <: Resource {
             }
             let resp = decoder.readValueIncludingPush()
             decoder.compact()
+            lastAttributes = decoder.getAttributes()
             decoder.clearAttributes()
             resp
         }
@@ -245,6 +250,8 @@ public class RedisConnection <: Resource {
                 for (_ in commands) {
                     let resp = decoder.readValue()
                     decoder.compact()
+                    // Pipeline 中每个命令的独立属性（覆盖前一个）
+                    lastAttributes = decoder.getAttributes()
                     decoder.clearAttributes()
                     responses.add(resp)
                 }
@@ -278,4 +285,9 @@ public class RedisConnection <: Resource {
     internal func setState(s: ConnectionState): Unit { state = s }
     internal func getDecoder(): RespDecoder { decoder }
     internal func getTransport(): Transport { transport }
+
+    /// 获取最后一次命令执行的 RESP3 属性数据
+    public func getAttributes(): Option<Array<(RESPValue, RESPValue)>> {
+        lastAttributes
+    }
 }

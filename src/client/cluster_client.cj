@@ -73,57 +73,36 @@ public class ClusterClient <: Resource {
 
             match (connections.get(targetNode)) {
                 case Some(conn) =>
-                    try {
-                        let resp = conn.execute(args)
-                        match (resp) {
-                            case RESPValue.Error(e) =>
-                                let err = createCommandError(e)
-                                match (err as MovedError) {
-                                    case Some(moved) =>
-                                        redirects++
-                                        let targetAddr = "${moved.targetHost}:${moved.targetPort}"
-                                        ensureConnection(targetAddr)
-                                        slotMap.refresh(conn.execute(stringsToBlobs(["CLUSTER", "SLOTS"])))
-                                        lastNode = Some(targetAddr)
-                                        continue
-                                    case None => ()
-                                }
-                                match (err as AskError) {
-                                    case Some(ask) =>
-                                        redirects++
-                                        let targetAddr = "${ask.targetHost}:${ask.targetPort}"
-                                        ensureConnection(targetAddr)
-                                        match (connections.get(targetAddr)) {
-                                            case Some(c) => c.execute(stringsToBlobs(["ASKING"]))
-                                            case None => ()
-                                        }
-                                        lastNode = Some(targetAddr)
-                                        continue
-                                    case None => ()
-                                }
-                            case _ => ()
-                        }
-                        return resp
-                    } catch (e: MovedError) {
-                        // MOVED 重定向：更新槽位映射并重试
-                        redirects++
-                        let targetAddr = "${e.targetHost}:${e.targetPort}"
-                        ensureConnection(targetAddr)
-                        // 更新槽位映射，避免后续命令再次触发 MOVED
-                        slotMap.refresh(conn.execute(stringsToBlobs(["CLUSTER", "SLOTS"])))
-                        lastNode = Some(targetAddr)
-                    } catch (e: AskError) {
-                        // ASK 重定向
-                        redirects++
-                        let targetAddr = "${e.targetHost}:${e.targetPort}"
-                        ensureConnection(targetAddr)
-                        // 发送 ASKING 命令
-                        match (connections.get(targetAddr)) {
-                            case Some(c) => c.execute(stringsToBlobs(["ASKING"]))
-                            case None => ()
-                        }
-                        lastNode = Some(targetAddr)
+                    let resp = conn.execute(args)
+                    match (resp) {
+                        case RESPValue.Error(e) =>
+                            let err = createCommandError(e)
+                            match (err as MovedError) {
+                                case Some(moved) =>
+                                    redirects++
+                                    let targetAddr = "${moved.targetHost}:${moved.targetPort}"
+                                    ensureConnection(targetAddr)
+                                    slotMap.refresh(conn.execute(stringsToBlobs(["CLUSTER", "SLOTS"])))
+                                    lastNode = Some(targetAddr)
+                                    continue
+                                case None => ()
+                            }
+                            match (err as AskError) {
+                                case Some(ask) =>
+                                    redirects++
+                                    let targetAddr = "${ask.targetHost}:${ask.targetPort}"
+                                    ensureConnection(targetAddr)
+                                    match (connections.get(targetAddr)) {
+                                        case Some(c) => c.execute(stringsToBlobs(["ASKING"]))
+                                        case None => ()
+                                    }
+                                    lastNode = Some(targetAddr)
+                                    continue
+                                case None => ()
+                            }
+                        case _ => ()
                     }
+                    return resp
                 case None =>
                     throw ConnectionError("未找到指定节点的连接: ${targetNode}", "", 0u16)
             }
@@ -227,6 +206,7 @@ extend ClusterClient {
         let resp = execute(stringsToBlobs(["GET", key]))
         match (resp) {
             case RESPValue.BulkString(v) => v
+            case RESPValue.Null => None
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("GET 返回意外类型")
         }
@@ -237,6 +217,9 @@ extend ClusterClient {
         let resp = execute([Blob.fromUtf8("SET"), Blob.fromUtf8(key), value])
         match (resp) {
             case RESPValue.SimpleString("OK") => true
+            case RESPValue.BulkString(Some(_)) => true   // GET 选项返回旧值
+            case RESPValue.BulkString(None) => false
+            case RESPValue.Null => false                 // RESP3 Null
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("SET 返回意外类型")
         }

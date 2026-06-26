@@ -84,6 +84,7 @@ public class SetCommand <: Command<Bool> {
             case RESPValue.SimpleString("OK") => true
             case RESPValue.BulkString(Some(_)) => true   // GET 选项返回旧值
             case RESPValue.BulkString(None) => false      // NX 下键已存在
+            case RESPValue.Null => false                  // RESP3 Null（同 RESP2 nil）
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("SET 返回意外类型")
         }
