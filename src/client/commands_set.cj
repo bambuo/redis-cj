@@ -55,6 +55,18 @@ extend RedisClient {
         expectBlob(resp, "SPOP")
     }
 
+    /// 移除并返回集合中的 count 个随机成员
+    public func spopCount(key: String, count: Int64): Array<Blob> {
+        let resp = executeString(["SPOP", key, "${count}"])
+        match (resp) {
+            case RESPValue.Array(Some(items)) => extractBlobArray(items)
+            case RESPValue.Set(items) => extractBlobArray(items)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("SPOP count 返回意外类型")
+        }
+    }
+
     /// 从集合中获取 count 个随机成员（不移除）
     public func srandmember(key: String, count!: Int64 = 1): Array<Blob> {
         let resp = executeString(["SRANDMEMBER", key, "${count}"])

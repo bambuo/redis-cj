@@ -30,6 +30,9 @@ public class SetCommand <: Command<Bool> {
     private let value: Blob
     private let ex: Option<Int64>
     private let px: Option<Int64>
+    private let exAt: Option<Int64>
+    private let pxAt: Option<Int64>
+    private let keepTtl: Bool
     private let nx: Bool
     private let xx: Bool
     private let get: Bool
@@ -37,11 +40,15 @@ public class SetCommand <: Command<Bool> {
     public init(key: String, value: Blob,
                 ex!: Option<Int64> = None,
                 px!: Option<Int64> = None,
+                exAt!: Option<Int64> = None,
+                pxAt!: Option<Int64> = None,
+                keepTtl!: Bool = false,
                 nx!: Bool = false,
                 xx!: Bool = false,
                 get!: Bool = false) {
         this.key = key; this.value = value
-        this.ex = ex; this.px = px; this.nx = nx; this.xx = xx; this.get = get
+        this.ex = ex; this.px = px; this.exAt = exAt; this.pxAt = pxAt
+        this.keepTtl = keepTtl; this.nx = nx; this.xx = xx; this.get = get
     }
 
     public override func encode(): Array<Blob> {
@@ -57,6 +64,15 @@ public class SetCommand <: Command<Bool> {
             case Some(t) => args.add(Blob.fromUtf8("PX")); args.add(Blob.fromUtf8("${t}"))
             case None => ()
         }
+        match (exAt) {
+            case Some(t) => args.add(Blob.fromUtf8("EXAT")); args.add(Blob.fromUtf8("${t}"))
+            case None => ()
+        }
+        match (pxAt) {
+            case Some(t) => args.add(Blob.fromUtf8("PXAT")); args.add(Blob.fromUtf8("${t}"))
+            case None => ()
+        }
+        if (keepTtl) { args.add(Blob.fromUtf8("KEEPTTL")) }
         if (nx) { args.add(Blob.fromUtf8("NX")) }
         if (xx) { args.add(Blob.fromUtf8("XX")) }
         if (get) { args.add(Blob.fromUtf8("GET")) }
@@ -87,10 +103,24 @@ extend RedisClient {
     public func set(key: String, value: Blob,
                     ex!: Option<Int64> = None,
                     px!: Option<Int64> = None,
+                    exAt!: Option<Int64> = None,
+                    pxAt!: Option<Int64> = None,
+                    keepTtl!: Bool = false,
                     nx!: Bool = false,
                     xx!: Bool = false,
                     get!: Bool = false): Bool {
-        SetCommand(key, value, ex: ex, px: px, nx: nx, xx: xx, get: get).execute(this)
+        SetCommand(
+            key,
+            value,
+            ex: ex,
+            px: px,
+            exAt: exAt,
+            pxAt: pxAt,
+            keepTtl: keepTtl,
+            nx: nx,
+            xx: xx,
+            get: get
+        ).execute(this)
     }
 
     /// 设置字符串值并返回旧值（GET 选项）

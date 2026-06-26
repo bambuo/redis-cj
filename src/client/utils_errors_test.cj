@@ -122,4 +122,16 @@ class ErrorTests {
         @Expect(e4 is CommandError, true)
         @Expect(e4.prefix, "UNKNOWN")
     }
+
+    @TestCase
+    func expectHelperUsesErrorFactory() {
+        @ExpectThrows[MovedError](expectInt(RESPValue.Error("MOVED 100 10.0.0.1:6379"), "TEST"))
+        @ExpectThrows[AskError](expectInt(RESPValue.Error("ASK 101 10.0.0.2:6380"), "TEST"))
+    }
+
+    @TestCase
+    func expectDoubleAcceptsBulkString() {
+        let v = expectDouble(RESPValue.BulkString(Some(Blob.fromUtf8("3.25"))), "FLOAT")
+        @Expect(v > 3.24 && v < 3.26, true)
+    }
 }

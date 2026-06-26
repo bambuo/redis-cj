@@ -9,14 +9,44 @@ import std.convert.*
 extend RedisClient {
     // -------- 基本操作 --------
 
-    public func zadd(key: String, scores: Array<(Float64, Blob)>): Int64 {
+    public func zadd(key: String, scores: Array<(Float64, Blob)>,
+                     nx!: Bool = false, xx!: Bool = false,
+                     gt!: Bool = false, lt!: Bool = false,
+                     ch!: Bool = false): Int64 {
         let args = ArrayList<Blob>()
         args.add(Blob.fromUtf8("ZADD")); args.add(Blob.fromUtf8(key))
+        if (nx) { args.add(Blob.fromUtf8("NX")) }
+        if (xx) { args.add(Blob.fromUtf8("XX")) }
+        if (gt) { args.add(Blob.fromUtf8("GT")) }
+        if (lt) { args.add(Blob.fromUtf8("LT")) }
+        if (ch) { args.add(Blob.fromUtf8("CH")) }
         for ((score, member) in scores) {
             args.add(Blob.fromUtf8("${score}")); args.add(member)
         }
         let resp = execute(collectArray(args.iterator()))
         expectInt(resp, "ZADD")
+    }
+
+    public func zaddIncr(key: String, score: Float64, member: Blob,
+                         nx!: Bool = false, xx!: Bool = false,
+                         gt!: Bool = false, lt!: Bool = false): Option<Float64> {
+        let args = ArrayList<Blob>()
+        args.add(Blob.fromUtf8("ZADD")); args.add(Blob.fromUtf8(key))
+        if (nx) { args.add(Blob.fromUtf8("NX")) }
+        if (xx) { args.add(Blob.fromUtf8("XX")) }
+        if (gt) { args.add(Blob.fromUtf8("GT")) }
+        if (lt) { args.add(Blob.fromUtf8("LT")) }
+        args.add(Blob.fromUtf8("INCR"))
+        args.add(Blob.fromUtf8("${score}")); args.add(member)
+        match (execute(collectArray(args.iterator()))) {
+            case RESPValue.BulkString(Some(blob)) => Some(Float64.parse(blob.toUtf8()))
+            case RESPValue.Double(f) => Some(f)
+            case RESPValue.BulkString(None) => None
+            case RESPValue.Null => None
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("ZADD INCR 返回意外类型")
+        }
     }
 
     public func zrem(key: String, members: Array<Blob>): Int64 {

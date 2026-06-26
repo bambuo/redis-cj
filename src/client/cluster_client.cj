@@ -75,6 +75,34 @@ public class ClusterClient <: Resource {
                 case Some(conn) =>
                     try {
                         let resp = conn.execute(args)
+                        match (resp) {
+                            case RESPValue.Error(e) =>
+                                let err = createCommandError(e)
+                                match (err as MovedError) {
+                                    case Some(moved) =>
+                                        redirects++
+                                        let targetAddr = "${moved.targetHost}:${moved.targetPort}"
+                                        ensureConnection(targetAddr)
+                                        slotMap.refresh(conn.execute(stringsToBlobs(["CLUSTER", "SLOTS"])))
+                                        lastNode = Some(targetAddr)
+                                        continue
+                                    case None => ()
+                                }
+                                match (err as AskError) {
+                                    case Some(ask) =>
+                                        redirects++
+                                        let targetAddr = "${ask.targetHost}:${ask.targetPort}"
+                                        ensureConnection(targetAddr)
+                                        match (connections.get(targetAddr)) {
+                                            case Some(c) => c.execute(stringsToBlobs(["ASKING"]))
+                                            case None => ()
+                                        }
+                                        lastNode = Some(targetAddr)
+                                        continue
+                                    case None => ()
+                                }
+                            case _ => ()
+                        }
                         return resp
                     } catch (e: MovedError) {
                         // MOVED 重定向：更新槽位映射并重试

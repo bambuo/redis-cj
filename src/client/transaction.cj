@@ -90,8 +90,10 @@ public class Transaction {
         let resp = client.executeString(["EXEC"])
         match (resp) {
             case RESPValue.Array(Some(items)) => items
-            case RESPValue.Array(None) => Array<RESPValue>()
-            case RESPValue.Error(e) => throw CommandError(e)
+            case RESPValue.Array(None) => throw TransactionAbortedError()
+            case RESPValue.Null => throw TransactionAbortedError()
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
             case _ => throw ProtocolError("EXEC 返回意外类型")
         }
     }

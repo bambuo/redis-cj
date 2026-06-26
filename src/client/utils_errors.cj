@@ -131,6 +131,17 @@ public class NoScriptError <: CommandError {
     }
 }
 
+/// 事务因 WATCH 冲突等原因被 Redis 放弃执行
+public class TransactionAbortedError <: RedisError {
+    public init() {
+        super("事务未执行：EXEC 返回 null（通常是 WATCH 监视的键被修改）")
+    }
+
+    public func toString(): String {
+        "TransactionAbortedError: ${message}"
+    }
+}
+
 /// 集群 MOVED 重定向
 public class MovedError <: CommandError {
     public var slot: Int64 = -1

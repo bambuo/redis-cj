@@ -73,6 +73,24 @@ class CommandIntegrationTests {
         @Expect(n, 2)
     }
 
+    @TestCase
+    func testIncrByFloatBulkStringReply() {
+        let c = createClient()
+        let k = uniqueKey("ibf")
+        let n = c.incrByFloat(k, 1.5)
+        @Expect(n > 1.49 && n < 1.51, true)
+    }
+
+    @TestCase
+    func testSetKeepTtl() {
+        let c = createClient()
+        let k = uniqueKey("skttl")
+        c.setex(k, 100, Blob.fromUtf8("v1"))
+        @Expect(c.set(k, Blob.fromUtf8("v2"), keepTtl: true), true)
+        let ttl = c.ttl(k)
+        @Expect(ttl > 0 && ttl <= 100, true)
+    }
+
     // -------- 列表命令 --------
 
     @TestCase
@@ -126,6 +144,15 @@ class CommandIntegrationTests {
         @Expect(results[1], false)
     }
 
+    @TestCase
+    func testSPopCount() {
+        let c = createClient()
+        let k = uniqueKey("spc")
+        c.sadd(k, [Blob.fromUtf8("a"), Blob.fromUtf8("b"), Blob.fromUtf8("c")])
+        let members = c.spopCount(k, 2)
+        @Expect(members.size, 2)
+    }
+
     // -------- 哈希命令 --------
 
     @TestCase
@@ -144,6 +171,14 @@ class CommandIntegrationTests {
         c.hset(k, "f", Blob.fromUtf8("hello"))
         let n = c.hstrlen(k, "f")
         @Expect(n, 5)
+    }
+
+    @TestCase
+    func testHIncrByFloatBulkStringReply() {
+        let c = createClient()
+        let k = uniqueKey("hibf")
+        let n = c.hincrByFloat(k, "f", 2.5)
+        @Expect(n > 2.49 && n < 2.51, true)
     }
 
     // -------- 有序集合命令 --------
@@ -183,6 +218,20 @@ class CommandIntegrationTests {
         let results = c.zpopmin(k)
         // ZPOPMIN 可能因并发返回空，仅验证不抛异常
         @Expect(true, true)
+    }
+
+    @TestCase
+    func testZAddOptionsAndIncr() {
+        let c = createClient()
+        let k = uniqueKey("zopts")
+        @Expect(c.zadd(k, [(1.0, Blob.fromUtf8("a"))], nx: true), 1)
+        @Expect(c.zadd(k, [(2.0, Blob.fromUtf8("a"))], nx: true), 0)
+        @Expect(c.zadd(k, [(3.0, Blob.fromUtf8("a"))], xx: true, ch: true), 1)
+        let n = c.zaddIncr(k, 1.5, Blob.fromUtf8("a"), xx: true)
+        match (n) {
+            case Some(v) => @Expect(v > 4.49 && v < 4.51, true)
+            case None => @Fail("ZADD INCR failed")
+        }
     }
 
     // -------- 流命令 --------
@@ -278,6 +327,19 @@ class CommandIntegrationTests {
         @Expect(true, true)
     }
 
+    @TestCase
+    func testTransactionWatchAbort() {
+        let c1 = createClient()
+        let c2 = createClient()
+        let k = uniqueKey("txabort")
+        c1.set(k, Blob.fromUtf8("v1"))
+        let txn = Transaction(c1)
+        txn.watch([k])
+        txn.queue(["SET", k, "v2"])
+        c2.set(k, Blob.fromUtf8("external"))
+        @ExpectThrows[TransactionAbortedError](txn.exec())
+    }
+
     // -------- 键命令 --------
 
     @TestCase
@@ -298,6 +360,16 @@ class CommandIntegrationTests {
         @Expect(ok, true)
         let ttl = c.ttl(k)
         @Expect(ttl > 0 && ttl <= 100, true)
+    }
+
+    @TestCase
+    func testExpireCondition() {
+        let c = createClient()
+        let k = uniqueKey("excond")
+        c.set(k, Blob.fromUtf8("v"))
+        @Expect(c.expire(k, 100, condition: Some("NX")), true)
+        @Expect(c.expire(k, 200, condition: Some("NX")), false)
+        @Expect(c.expire(k, 200, condition: Some("XX")), true)
     }
 
     @TestCase

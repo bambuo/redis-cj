@@ -66,20 +66,26 @@ extend RedisClient {
     // -------- 过期 --------
 
     /// 设置键的过期时间（秒）
-    public func expire(key: String, seconds: Int64): Bool {
-        let resp = executeString(["EXPIRE", key, "${seconds}"])
+    public func expire(key: String, seconds: Int64, condition!: Option<String> = None): Bool {
+        let args = ArrayList<String>(); args.add("EXPIRE"); args.add(key); args.add("${seconds}")
+        match (condition) { case Some(c) => args.add(c) case None => () }
+        let resp = executeString(collectArray(args.iterator()))
         expectBool(resp, "EXPIRE")
     }
 
     /// 设置键的过期时间（毫秒）
-    public func pexpire(key: String, milliseconds: Int64): Bool {
-        let resp = executeString(["PEXPIRE", key, "${milliseconds}"])
+    public func pexpire(key: String, milliseconds: Int64, condition!: Option<String> = None): Bool {
+        let args = ArrayList<String>(); args.add("PEXPIRE"); args.add(key); args.add("${milliseconds}")
+        match (condition) { case Some(c) => args.add(c) case None => () }
+        let resp = executeString(collectArray(args.iterator()))
         expectBool(resp, "PEXPIRE")
     }
 
     /// 设置键在指定时间戳过期（秒级时间戳）
-    public func expireAt(key: String, timestamp: Int64): Bool {
-        let resp = executeString(["EXPIREAT", key, "${timestamp}"])
+    public func expireAt(key: String, timestamp: Int64, condition!: Option<String> = None): Bool {
+        let args = ArrayList<String>(); args.add("EXPIREAT"); args.add(key); args.add("${timestamp}")
+        match (condition) { case Some(c) => args.add(c) case None => () }
+        let resp = executeString(collectArray(args.iterator()))
         expectBool(resp, "EXPIREAT")
     }
 
@@ -238,8 +244,11 @@ extend RedisClient {
         expectInt(executeString(["EXPIRETIME", key]), "EXPIRETIME")
     }
 
-    public func pexpireat(key: String, millisecondsTimestamp: Int64): Bool {
-        expectBool(executeString(["PEXPIREAT", key, "${millisecondsTimestamp}"]), "PEXPIREAT")
+    public func pexpireat(key: String, millisecondsTimestamp: Int64,
+                          condition!: Option<String> = None): Bool {
+        let args = ArrayList<String>(); args.add("PEXPIREAT"); args.add(key); args.add("${millisecondsTimestamp}")
+        match (condition) { case Some(c) => args.add(c) case None => () }
+        expectBool(executeString(collectArray(args.iterator())), "PEXPIREAT")
     }
 
     public func pexpiretime(key: String): Int64 {

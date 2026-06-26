@@ -1,5 +1,6 @@
 package redis.client
 import std.collection.*
+import std.convert.*
 
 // ====================================================================
 // Command<T> — 命令模式抽象基类
@@ -43,7 +44,8 @@ public abstract class Command<T> {
 public func expectSimpleString(resp: RESPValue, cmd: String): String {
     match (resp) {
         case RESPValue.SimpleString(s) => s
-        case RESPValue.Error(e) => throw CommandError(e)
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
         case _ => throw ProtocolError("${cmd}: 期望 SimpleString，但收到 ${respValueToString(resp)}")
     }
 }
@@ -52,7 +54,8 @@ public func expectSimpleString(resp: RESPValue, cmd: String): String {
 public func expectOK(resp: RESPValue, cmd: String): Unit {
     match (resp) {
         case RESPValue.SimpleString("OK") => ()
-        case RESPValue.Error(e) => throw CommandError(e)
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
         case _ => throw ProtocolError("${cmd}: 期望 OK，但收到 ${respValueToString(resp)}")
     }
 }
@@ -61,7 +64,8 @@ public func expectOK(resp: RESPValue, cmd: String): Unit {
 public func expectInt(resp: RESPValue, cmd: String): Int64 {
     match (resp) {
         case RESPValue.Integer(n) => n
-        case RESPValue.Error(e) => throw CommandError(e)
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
         case _ => throw ProtocolError("${cmd}: 期望 Integer，但收到 ${respValueToString(resp)}")
     }
 }
@@ -71,7 +75,8 @@ public func expectBlob(resp: RESPValue, cmd: String): Option<Blob> {
     match (resp) {
         case RESPValue.BulkString(v) => v
         case RESPValue.Null => None
-        case RESPValue.Error(e) => throw CommandError(e)
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
         case _ => throw ProtocolError("${cmd}: 期望 BulkString，但收到 ${respValueToString(resp)}")
     }
 }
@@ -84,7 +89,8 @@ public func expectBlobVal(resp: RESPValue, cmd: String): Blob {
             throw ProtocolError("${cmd}: 收到意外的 nil BulkString")
         case RESPValue.Null =>
             throw ProtocolError("${cmd}: 收到意外的 Null")
-        case RESPValue.Error(e) => throw CommandError(e)
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
         case _ => throw ProtocolError("${cmd}: 期望 BulkString，但收到 ${respValueToString(resp)}")
     }
 }
@@ -94,7 +100,8 @@ public func expectArray(resp: RESPValue, cmd: String): Option<Array<RESPValue>> 
     match (resp) {
         case RESPValue.Array(v) => v
         case RESPValue.Null => None
-        case RESPValue.Error(e) => throw CommandError(e)
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
         case _ => throw ProtocolError("${cmd}: 期望 Array，但收到 ${respValueToString(resp)}")
     }
 }
@@ -103,7 +110,8 @@ public func expectArray(resp: RESPValue, cmd: String): Option<Array<RESPValue>> 
 public func expectMapOrArray(resp: RESPValue, cmd: String): RESPValue {
     match (resp) {
         case RESPValue.Map(_) | RESPValue.Array(_) => resp
-        case RESPValue.Error(e) => throw CommandError(e)
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
         case _ => throw ProtocolError("${cmd}: 期望 Map/Array，但收到 ${respValueToString(resp)}")
     }
 }
@@ -114,7 +122,8 @@ public func expectBool(resp: RESPValue, cmd: String): Bool {
         case RESPValue.Boolean(b) => b
         case RESPValue.Integer(1) => true
         case RESPValue.Integer(0) => false
-        case RESPValue.Error(e) => throw CommandError(e)
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
         case _ => throw ProtocolError("${cmd}: 期望 Boolean，但收到 ${respValueToString(resp)}")
     }
 }
@@ -123,7 +132,20 @@ public func expectBool(resp: RESPValue, cmd: String): Bool {
 public func expectDouble(resp: RESPValue, cmd: String): Float64 {
     match (resp) {
         case RESPValue.Double(f) => f
-        case RESPValue.Error(e) => throw CommandError(e)
+        case RESPValue.BulkString(Some(blob)) =>
+            try {
+                Float64.parse(blob.toUtf8())
+            } catch (e: Exception) {
+                throw ProtocolError("${cmd}: 浮点数解析失败: ${e.message}")
+            }
+        case RESPValue.SimpleString(s) =>
+            try {
+                Float64.parse(s)
+            } catch (e: Exception) {
+                throw ProtocolError("${cmd}: 浮点数解析失败: ${e.message}")
+            }
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
         case _ => throw ProtocolError("${cmd}: 期望 Double，但收到 ${respValueToString(resp)}")
     }
 }
