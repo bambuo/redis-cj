@@ -1,6 +1,4 @@
 package redis.client
-import std.time.*
-
 /// 传输层接口（策略模式）
 ///
 /// 抽象了底层网络传输能力，支持 TCP、TLS（未来）等多种实现。

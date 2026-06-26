@@ -1,5 +1,4 @@
 package redis.client
-import std.collection.*
 
 /// 命令集成测试（需要本地 Redis 服务器 127.0.0.1:6379）
 /// 每个测试用例使用唯一键名前缀，避免互相干扰
@@ -91,6 +90,39 @@ class CommandIntegrationTests {
         @Expect(ttl > 0 && ttl <= 100, true)
     }
 
+    @TestCase
+    func testSetGetKeepsOldValue() {
+        let c = createClient()
+        let k = uniqueKey("sg")
+        c.set(k, Blob.fromUtf8("old"))
+        let old = c.setGet(k, Blob.fromUtf8("new"))
+        match (old) {
+            case Some(v) => @Expect(v.toUtf8(), "old")
+            case None => @Fail("SET GET 应返回旧值")
+        }
+        let now = c.get(k)
+        match (now) {
+            case Some(v) => @Expect(v.toUtf8(), "new")
+            case None => @Fail("SET GET 应写入新值")
+        }
+    }
+
+    @TestCase
+    func testGetExPersistAndBitfieldRo() {
+        let c = createClient()
+        let k = uniqueKey("getex")
+        c.setex(k, 100, Blob.fromUtf8("A"))
+        let v = c.getex(k, persist: true)
+        match (v) { case Some(b) => @Expect(b.toUtf8(), "A") case None => @Fail("GETEX failed") }
+        @Expect(c.ttl(k), -1)
+        let bits = c.bitfieldRo(k, ["GET", "u8", "0"])
+        @Expect(bits.size, 1)
+        match (bits[0]) {
+            case Some(n) => @Expect(n, 65)
+            case None => @Fail("BITFIELD_RO failed")
+        }
+    }
+
     // -------- 列表命令 --------
 
     @TestCase
@@ -110,6 +142,22 @@ class CommandIntegrationTests {
         c.lset(k, 1, Blob.fromUtf8("b"))
         let v = c.lindex(k, 1)
         match (v) { case Some(b) => @Expect(b.toUtf8(), "b") case _ => @Fail("LSET failed") }
+    }
+
+    @TestCase
+    func testListCountPopAndLmPop() {
+        let c = createClient()
+        let k = uniqueKey("lcnt")
+        c.rpush(k, [Blob.fromUtf8("a"), Blob.fromUtf8("b"), Blob.fromUtf8("c")])
+        @Expect(c.lpopCount(k, 2).size, 2)
+        c.rpush(k, [Blob.fromUtf8("d"), Blob.fromUtf8("e")])
+        let popped = c.lmpop([k], side: "RIGHT", count: Some(2))
+        match (popped) {
+            case Some((key, vals)) =>
+                @Expect(key, k)
+                @Expect(vals.size, 2)
+            case None => @Fail("LMPOP failed")
+        }
     }
 
     // -------- 集合命令 --------
@@ -307,6 +355,19 @@ class CommandIntegrationTests {
         match (n) { case Some(v) => @Expect(v, name) case _ => @Fail("CLIENT GETNAME failed") }
     }
 
+    @TestCase
+    func testClientTrackingInfoAndAclWhoami() {
+        let c = createClient()
+        let redir = c.clientGetRedir()
+        @Expect(redir >= -1, true)
+        let info = c.clientTrackingInfo()
+        match (info) {
+            case RESPValue.Array(_) | RESPValue.Map(_) => ()
+            case _ => @Fail("CLIENT TRACKINGINFO 返回类型异常")
+        }
+        @Expect(c.aclWhoami().size > 0, true)
+    }
+
     // -------- 事务命令 --------
 
     @TestCase
@@ -373,6 +434,18 @@ class CommandIntegrationTests {
     }
 
     @TestCase
+    func testScanTypeAndSortStore() {
+        let c = createClient()
+        let k = uniqueKey("scantype")
+        let dst = uniqueKey("sortdst")
+        c.rpush(k, [Blob.fromUtf8("2"), Blob.fromUtf8("1")])
+        let (_, keys) = c.scan(0, pattern: Some("${k}*"), typeFilter: Some("list"))
+        @Expect(keys.size >= 1, true)
+        @Expect(c.sortStore(k, dst), 2)
+        @Expect(c.llen(dst), 2)
+    }
+
+    @TestCase
     func testPersist() {
         let c = createClient()
         let k = uniqueKey("psk")
@@ -434,6 +507,13 @@ class CommandIntegrationTests {
         @Expect(exists[0], true)
     }
 
+    @TestCase
+    func testCommandGetKeysAndFlags() {
+        let c = createClient()
+        let keys = c.commandGetKeysAndFlags(["SET", "k", "v"])
+        @Expect(keys.size > 0, true)
+    }
+
     // -------- Pipeline --------
 
     @TestCase
@@ -457,6 +537,7 @@ class CommandIntegrationTests {
         c.set(k1, Blob.fromUtf8("v"))
         c.set(k2, Blob.fromUtf8("v"))
         let (cursor, keys) = c.scan(0)
+        @Expect(cursor >= 0, true)
         @Expect(keys.size >= 2, true)
     }
 
@@ -487,5 +568,22 @@ class CommandIntegrationTests {
         c.geoadd(k, [(13.361389, 38.115556, Blob.fromUtf8("Palermo"))])
         let hashes = c.geohash(k, [Blob.fromUtf8("Palermo")])
         @Expect(hashes.size, 1)
+    }
+
+    @TestCase
+    func testGeoSearchBoxAndOrder() {
+        let c = createClient()
+        let k = uniqueKey("gbox")
+        c.geoadd(k, [(13.361389, 38.115556, Blob.fromUtf8("Palermo")),
+                     (15.087269, 37.502669, Blob.fromUtf8("Catania"))])
+        let results = c.geosearch(
+            k,
+            fromLonLat: Some((15.0, 37.0)),
+            box: Some((500.0, 500.0)),
+            unit: "km",
+            order: Some("ASC"),
+            count: Some(2)
+        )
+        @Expect(results.size > 0, true)
     }
 }

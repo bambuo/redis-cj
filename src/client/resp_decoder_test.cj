@@ -285,6 +285,33 @@ class DecoderTests {
         }
     }
 
+    @TestCase
+    func readValueSkipsPush() {
+        let data = Blob.fromUtf8(">3\r\n+message\r\n+ch\r\n+hello\r\n+OK\r\n").toBytes()
+        let dec = decoderFromBytes(data)
+        let val = dec.readValue()
+        match (val) {
+            case RESPValue.SimpleString(s) => @Expect(s, "OK")
+            case _ => @Fail("普通 readValue 应跳过 Push 并返回后续响应")
+        }
+    }
+
+    @TestCase
+    func readValueIncludingPushReturnsPush() {
+        let data = Blob.fromUtf8(">3\r\n+message\r\n+ch\r\n+hello\r\n").toBytes()
+        let dec = decoderFromBytes(data)
+        let val = dec.readValueIncludingPush()
+        match (val) {
+            case RESPValue.Push(items) =>
+                @Expect(items.size, 3)
+                match (asString(items[0])) {
+                    case Some(s) => @Expect(s, "message")
+                    case None => @Fail("Push 类型应为字符串")
+                }
+            case _ => @Fail("期望 Push")
+        }
+    }
+
     // -------- 健壮性 --------
 
     /// skipCRLF 验证失败应抛异常

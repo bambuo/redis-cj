@@ -1,5 +1,4 @@
 package redis.client
-import std.time.*
 import std.collection.*
 import std.sync.*
 
@@ -169,12 +168,56 @@ public class RedisConnection <: Resource {
     }
 
     private func sendRawCommand(args: Array<Blob>): RESPValue {
+        sendRawCommand(args, includePush: false)
+    }
+
+    private func sendRawCommand(args: Array<Blob>, includePush!: Bool): RESPValue {
         let data = RespEncoder.encodeCommand(args)
         transport.write(data)
-        let resp = decoder.readValue()
+        let resp = if (includePush) {
+            decoder.readValueIncludingPush()
+        } else {
+            decoder.readValue()
+        }
         decoder.compact()
         decoder.clearAttributes()
         resp
+    }
+
+    internal func executeReturningPush(args: Array<Blob>): RESPValue {
+        synchronized (lock) {
+            match (state) {
+                case ConnectionState.Connected
+                   | ConnectionState.Subscribed => ()
+                case ConnectionState.Closed =>
+                    throw ConnectionError("连接已关闭", transport.remoteAddress(), 0u16)
+                case _ =>
+                    throw ConnectionError(
+                        "连接未就绪（状态: ${stateDescription(state)}）",
+                        transport.remoteAddress(), 0u16
+                    )
+            }
+            sendRawCommand(args, includePush: true)
+        }
+    }
+
+    internal func readNextPush(): RESPValue {
+        synchronized (lock) {
+            match (state) {
+                case ConnectionState.Subscribed => ()
+                case ConnectionState.Closed =>
+                    throw ConnectionError("连接已关闭", transport.remoteAddress(), 0u16)
+                case _ =>
+                    throw ConnectionError(
+                        "连接未处于订阅状态（状态: ${stateDescription(state)}）",
+                        transport.remoteAddress(), 0u16
+                    )
+            }
+            let resp = decoder.readValueIncludingPush()
+            decoder.compact()
+            decoder.clearAttributes()
+            resp
+        }
     }
 
     public func executeBatch(commands: Array<Array<Blob>>): Array<RESPValue> {

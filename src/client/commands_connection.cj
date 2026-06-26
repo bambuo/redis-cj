@@ -12,6 +12,12 @@ extend RedisClient {
         expectInt(resp, "CLIENT ID")
     }
 
+    /// 获取当前连接的客户端缓存失效重定向目标
+    public func clientGetRedir(): Int64 {
+        let resp = executeString(["CLIENT", "GETREDIR"])
+        expectInt(resp, "CLIENT GETREDIR")
+    }
+
     /// 追踪客户端（用于缓存失效通知）
     public func clientTracking(on: Bool, redirect!: Option<Int64> = None,
                                prefixes!: Array<String> = []): Unit {
@@ -21,6 +27,26 @@ extend RedisClient {
         for (p in prefixes) { args.add("PREFIX"); args.add(p) }
         let resp = executeString(collectArray(args.iterator()))
         expectOK(resp, "CLIENT TRACKING")
+    }
+
+    /// 获取客户端缓存追踪状态
+    public func clientTrackingInfo(): RESPValue {
+        let resp = executeString(["CLIENT", "TRACKINGINFO"])
+        match (resp) {
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => resp
+        }
+    }
+
+    /// 上报客户端库名称（Redis 7.2+）
+    public func clientSetInfoLibName(name: String): Unit {
+        expectOK(executeString(["CLIENT", "SETINFO", "LIB-NAME", name]), "CLIENT SETINFO LIB-NAME")
+    }
+
+    /// 上报客户端库版本（Redis 7.2+）
+    public func clientSetInfoLibVer(version: String): Unit {
+        expectOK(executeString(["CLIENT", "SETINFO", "LIB-VER", version]), "CLIENT SETINFO LIB-VER")
     }
 
     /// 杀死客户端连接

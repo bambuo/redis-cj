@@ -133,11 +133,24 @@ extend RedisClient {
     }
 
     /// 反序列化并恢复键的值
-    public func restore(key: String, ttl: Int64, serializedValue: Blob, replace!: Bool = false): Unit {
+    public func restore(key: String, ttl: Int64, serializedValue: Blob,
+                        replace!: Bool = false,
+                        absTtl!: Bool = false,
+                        idleTime!: Option<Int64> = None,
+                        freq!: Option<Int64> = None): Unit {
         let args = ArrayList<Blob>()
         args.add(Blob.fromUtf8("RESTORE")); args.add(Blob.fromUtf8(key))
         args.add(Blob.fromUtf8("${ttl}")); args.add(serializedValue)
         if (replace) { args.add(Blob.fromUtf8("REPLACE")) }
+        if (absTtl) { args.add(Blob.fromUtf8("ABSTTL")) }
+        match (idleTime) {
+            case Some(t) => args.add(Blob.fromUtf8("IDLETIME")); args.add(Blob.fromUtf8("${t}"))
+            case None => ()
+        }
+        match (freq) {
+            case Some(f) => args.add(Blob.fromUtf8("FREQ")); args.add(Blob.fromUtf8("${f}"))
+            case None => ()
+        }
         let resp = execute(collectArray(args.iterator()))
         expectOK(resp, "RESTORE")
     }
@@ -164,14 +177,51 @@ extend RedisClient {
         }
     }
 
+    /// SORT_RO：只读排序，不支持 STORE。
+    public func sortRo(key: String, by!: Option<String> = None, limit!: Option<(Int64, Int64)> = None,
+                       get!: Array<String> = [], order!: Option<String> = None,
+                       alpha!: Bool = false): Array<Blob> {
+        let args = ArrayList<String>(); args.add("SORT_RO"); args.add(key)
+        match (by) { case Some(b) => args.add("BY"); args.add(b) case None => () }
+        match (limit) { case Some((o, c)) => args.add("LIMIT"); args.add("${o}"); args.add("${c}") case None => () }
+        for (g in get) { args.add("GET"); args.add(g) }
+        match (order) { case Some(o) => args.add(o) case None => () }
+        if (alpha) { args.add("ALPHA") }
+        match (executeString(collectArray(args.iterator()))) {
+            case RESPValue.Array(Some(items)) => extractBlobArray(items)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("SORT_RO 返回意外类型")
+        }
+    }
+
+    /// SORT ... STORE：返回存储到目标键的元素个数。
+    public func sortStore(key: String, destination: String,
+                          by!: Option<String> = None,
+                          limit!: Option<(Int64, Int64)> = None,
+                          get!: Array<String> = [],
+                          order!: Option<String> = None,
+                          alpha!: Bool = false): Int64 {
+        let args = ArrayList<String>(); args.add("SORT"); args.add(key)
+        match (by) { case Some(b) => args.add("BY"); args.add(b) case None => () }
+        match (limit) { case Some((o, c)) => args.add("LIMIT"); args.add("${o}"); args.add("${c}") case None => () }
+        for (g in get) { args.add("GET"); args.add(g) }
+        match (order) { case Some(o) => args.add(o) case None => () }
+        if (alpha) { args.add("ALPHA") }
+        args.add("STORE"); args.add(destination)
+        expectInt(executeString(collectArray(args.iterator())), "SORT STORE")
+    }
+
     // -------- SCAN 迭代 --------
 
     /// 渐进式扫描键空间（返回游标和键列表）
     public func scan(cursor: Int64, pattern!: Option<String> = None,
-                     count!: Option<Int64> = None): (Int64, Array<String>) {
+                     count!: Option<Int64> = None,
+                     typeFilter!: Option<String> = None): (Int64, Array<String>) {
         let args = ArrayList<String>(); args.add("SCAN"); args.add("${cursor}")
         match (pattern) { case Some(p) => args.add("MATCH"); args.add(p) case None => () }
         match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
+        match (typeFilter) { case Some(t) => args.add("TYPE"); args.add(t) case None => () }
         parseScanResult(executeString(collectArray(args.iterator())))
     }
 

@@ -123,6 +123,30 @@ extend RedisClient {
         ).execute(this)
     }
 
+    /// SET ... GET：设置新值并返回旧值。旧值不存在或条件未满足时返回 None。
+    public func setGet(key: String, value: Blob,
+                       ex!: Option<Int64> = None,
+                       px!: Option<Int64> = None,
+                       exAt!: Option<Int64> = None,
+                       pxAt!: Option<Int64> = None,
+                       keepTtl!: Bool = false,
+                       nx!: Bool = false,
+                       xx!: Bool = false): Option<Blob> {
+        let args = ArrayList<Blob>()
+        args.add(Blob.fromUtf8("SET"))
+        args.add(Blob.fromUtf8(key))
+        args.add(value)
+        match (ex) { case Some(t) => args.add(Blob.fromUtf8("EX")); args.add(Blob.fromUtf8("${t}")) case None => () }
+        match (px) { case Some(t) => args.add(Blob.fromUtf8("PX")); args.add(Blob.fromUtf8("${t}")) case None => () }
+        match (exAt) { case Some(t) => args.add(Blob.fromUtf8("EXAT")); args.add(Blob.fromUtf8("${t}")) case None => () }
+        match (pxAt) { case Some(t) => args.add(Blob.fromUtf8("PXAT")); args.add(Blob.fromUtf8("${t}")) case None => () }
+        if (keepTtl) { args.add(Blob.fromUtf8("KEEPTTL")) }
+        if (nx) { args.add(Blob.fromUtf8("NX")) }
+        if (xx) { args.add(Blob.fromUtf8("XX")) }
+        args.add(Blob.fromUtf8("GET"))
+        expectBlob(execute(collectArray(args.iterator())), "SET GET")
+    }
+
     /// 设置字符串值并返回旧值（GET 选项）
     public func getSet(key: String, value: Blob): Option<Blob> {
         let resp = execute([Blob.fromUtf8("GETSET"), Blob.fromUtf8(key), value])
@@ -266,10 +290,13 @@ extend RedisClient {
 
     /// 获取键的值并设置新过期时间（Redis 6.2+）
     public func getex(key: String, ex!: Option<Int64> = None, px!: Option<Int64> = None,
+                      exAt!: Option<Int64> = None, pxAt!: Option<Int64> = None,
                       persist!: Bool = false): Option<Blob> {
         let args = ArrayList<String>(); args.add("GETEX"); args.add(key)
         match (ex) { case Some(t) => args.add("EX"); args.add("${t}") case None => () }
         match (px) { case Some(t) => args.add("PX"); args.add("${t}") case None => () }
+        match (exAt) { case Some(t) => args.add("EXAT"); args.add("${t}") case None => () }
+        match (pxAt) { case Some(t) => args.add("PXAT"); args.add("${t}") case None => () }
         if (persist) { args.add("PERSIST") }
         let resp = executeString(collectArray(args.iterator()))
         expectBlob(resp, "GETEX")
@@ -308,6 +335,18 @@ extend RedisClient {
         let args = ArrayList<String>(); args.add("BITFIELD"); args.add(key)
         for (op in operations) { args.add(op) }
         let resp = executeString(collectArray(args.iterator()))
+        parseBitfieldResult(resp, "BITFIELD")
+    }
+
+    /// 执行只读 BITFIELD_RO 命令
+    public func bitfieldRo(key: String, operations: Array<String>): Array<Option<Int64>> {
+        let args = ArrayList<String>(); args.add("BITFIELD_RO"); args.add(key)
+        for (op in operations) { args.add(op) }
+        let resp = executeString(collectArray(args.iterator()))
+        parseBitfieldResult(resp, "BITFIELD_RO")
+    }
+
+    private func parseBitfieldResult(resp: RESPValue, cmd: String): Array<Option<Int64>> {
         match (resp) {
             case RESPValue.Array(Some(items)) =>
                 let result = ArrayList<Option<Int64>>()
@@ -319,8 +358,9 @@ extend RedisClient {
                     }
                 }
                 collectArray(result.iterator())
-            case RESPValue.Error(e) => throw CommandError(e)
-            case _ => throw ProtocolError("BITFIELD 返回意外类型")
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("${cmd} 返回意外类型")
         }
     }
 

@@ -58,7 +58,6 @@ extend RedisClient {
             case RESPValue.BulkString(Some(blob)) => Some(blob.toUtf8())
             case RESPValue.BulkString(None) => None
             case RESPValue.Null => None
-            case RESPValue.Null => None
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("CLIENT GETNAME 返回意外类型")
         }
@@ -155,6 +154,18 @@ extend RedisClient {
         }
     }
 
+    /// 获取命令文档（Redis 7.0+）
+    public func commandDocs(commandNames!: Array<String> = []): RESPValue {
+        let args = ArrayList<String>(); args.add("COMMAND"); args.add("DOCS")
+        for (n in commandNames) { args.add(n) }
+        let resp = executeString(collectArray(args.iterator()))
+        match (resp) {
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => resp
+        }
+    }
+
     public func commandStats(): Array<RESPValue> {
         match (executeString(["COMMAND", "STATS"])) {
             case RESPValue.Array(Some(items)) => items
@@ -187,6 +198,18 @@ extend RedisClient {
         }
     }
 
+    /// 获取命令涉及的键及访问标志（Redis 7.0+）
+    public func commandGetKeysAndFlags(command: Array<String>): Array<RESPValue> {
+        let args = ArrayList<String>(); args.add("COMMAND"); args.add("GETKEYSANDFLAGS")
+        for (a in command) { args.add(a) }
+        match (executeString(collectArray(args.iterator()))) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("COMMAND GETKEYSANDFLAGS 返回意外类型")
+        }
+    }
+
     // -------- MEMORY --------
 
     /// 获取键的内存使用量（字节）
@@ -206,12 +229,35 @@ extend RedisClient {
     public func memoryStats(): RESPValue {
         let resp = executeString(["MEMORY", "STATS"])
         match (resp) {
-            case RESPValue.Error(e) => throw CommandError(e)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
             case _ => resp
         }
     }
 
+    public func memoryDoctor(): String {
+        expectBlobVal(executeString(["MEMORY", "DOCTOR"]), "MEMORY DOCTOR").toUtf8()
+    }
+
+    public func memoryMallocStats(): String {
+        expectBlobVal(executeString(["MEMORY", "MALLOC-STATS"]), "MEMORY MALLOC-STATS").toUtf8()
+    }
+
+    public func memoryPurge(): Unit {
+        expectOK(executeString(["MEMORY", "PURGE"]), "MEMORY PURGE")
+    }
+
     // -------- ACL --------
+
+    /// 列出 ACL 规则
+    public func aclList(): Array<String> {
+        match (executeString(["ACL", "LIST"])) {
+            case RESPValue.Array(Some(items)) => extractStringArray(items)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("ACL LIST 返回意外类型")
+        }
+    }
 
     /// 列出 ACL 用户
     public func aclUsers(): Array<String> {
@@ -220,6 +266,11 @@ extend RedisClient {
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("ACL USERS 返回意外类型")
         }
+    }
+
+    /// 返回当前认证用户
+    public func aclWhoami(): String {
+        expectBlobVal(executeString(["ACL", "WHOAMI"]), "ACL WHOAMI").toUtf8()
     }
 
     /// 获取 ACL 用户信息

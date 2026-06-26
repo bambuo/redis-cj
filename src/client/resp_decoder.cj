@@ -1,8 +1,6 @@
 package redis.client
-import std.net.*
 import std.collection.*
 import std.convert.*
-import std.time.*
 
 // ====================================================================
 // RESP 解码器
@@ -129,6 +127,14 @@ public class RespDecoder {
         readValue(0)
     }
 
+    /// 读取下一个完整 RESP 值，并允许顶层 Push 作为返回值。
+    ///
+    /// 普通命令应继续使用 readValue()，让 out-of-band Push 触发回调后被跳过。
+    /// Pub/Sub、MONITOR 等 push-mode 命令需要读取订阅确认帧，因此使用此入口。
+    public func readValueIncludingPush(): RESPValue {
+        readValue(0, includePush: true)
+    }
+
     /// 读取下一个完整 RESP 值（带深度跟踪）
     ///
     /// 这是高层读取方法，自动处理：
@@ -139,6 +145,10 @@ public class RespDecoder {
     /// @param depth 当前递归深度（内部使用）
     /// @return 第一个非 Push、非 Attribute 的 RESP 值
     public func readValue(depth: Int64): RESPValue {
+        readValue(depth, includePush: false)
+    }
+
+    private func readValue(depth: Int64, includePush!: Bool): RESPValue {
         if (depth > maxDepth) {
             throw ProtocolError("RESP 嵌套超过最大深度 ${maxDepth}")
         }
@@ -165,7 +175,7 @@ public class RespDecoder {
                 let ch = readByte()
                 if (ch == 0x3Fu8) {  // '?' → 流式字符串
                     skipCRLF()
-                    readStreamedString(depth)
+                    readStreamedString()
                 } else {
                     // 已读取了第一个数字字符，需要组装回长度行
                     // 用回退方式：把字符放回不可行，直接继续读取数字直到 CRLF
@@ -318,9 +328,12 @@ public class RespDecoder {
                     items.add(readValue(depth + 1))
                 }
                 let pushVal = RESPValue.Push(collectArray(items.iterator()))
-                // Push 数据不直接返回给调用者，触发回调后继续读取
                 dispatchPush(pushVal)
-                readValue(depth)  // 在同一深度读取真正的响应
+                if (includePush) {
+                    pushVal
+                } else {
+                    readValue(depth)  // 在同一深度读取真正的响应
+                }
 
             case b'|' =>  // Attribute
                 let ch = readByte()
@@ -353,7 +366,7 @@ public class RespDecoder {
     // ====================================================================
 
     /// 读取流式字符串（$? ... ;0\r\n）
-    private func readStreamedString(depth: Int64): RESPValue {
+    private func readStreamedString(): RESPValue {
         let chunks = ArrayList<Array<Byte>>()
         while (true) {
             let b = readByte()

@@ -91,6 +91,8 @@ extend RedisClient {
     public func geosearch(key: String, fromMember!: Option<String> = None,
                           fromLonLat!: Option<(Float64, Float64)> = None,
                           radius!: Option<Float64> = None, unit!: String = "m",
+                          box!: Option<(Float64, Float64)> = None,
+                          order!: Option<String> = None,
                           count!: Option<Int64> = None, any!: Bool = false,
                           withDist!: Bool = false, withCoord!: Bool = false): Array<RESPValue> {
         let args = ArrayList<String>(); args.add("GEOSEARCH"); args.add(key)
@@ -104,6 +106,12 @@ extend RedisClient {
             case None => ()
         }
         match (radius) { case Some(r) => args.add("BYRADIUS"); args.add("${r}"); args.add(unit) case None => () }
+        match (box) {
+            case Some((width, height)) =>
+                args.add("BYBOX"); args.add("${width}"); args.add("${height}"); args.add(unit)
+            case None => ()
+        }
+        match (order) { case Some(o) => args.add(o) case None => () }
         match (count) {
             case Some(c) =>
                 args.add("COUNT"); args.add("${c}")
@@ -124,11 +132,19 @@ extend RedisClient {
     public func georadius(key: String, longitude: Float64, latitude: Float64,
                           radius: Float64, unit!: String = "m",
                           withDist!: Bool = false, withCoord!: Bool = false,
-                          count!: Option<Int64> = None): Array<RESPValue> {
+                          count!: Option<Int64> = None,
+                          order!: Option<String> = None,
+                          any!: Bool = false): Array<RESPValue> {
         let args = ArrayList<String>(); args.add("GEORADIUS"); args.add(key)
         args.add("${longitude}"); args.add("${latitude}")
         args.add("${radius}"); args.add(unit)
-        match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
+        match (count) {
+            case Some(c) =>
+                args.add("COUNT"); args.add("${c}")
+                if (any) { args.add("ANY") }
+            case None => ()
+        }
+        match (order) { case Some(o) => args.add(o) case None => () }
         if (withDist) { args.add("WITHDIST") }
         if (withCoord) { args.add("WITHCOORD") }
         let resp = executeString(collectArray(args.iterator()))
@@ -144,10 +160,18 @@ extend RedisClient {
     public func georadiusbymember(key: String, member: String, radius: Float64,
                                   unit!: String = "m",
                                   withDist!: Bool = false, withCoord!: Bool = false,
-                                  count!: Option<Int64> = None): Array<RESPValue> {
+                                  count!: Option<Int64> = None,
+                                  order!: Option<String> = None,
+                                  any!: Bool = false): Array<RESPValue> {
         let args = ArrayList<String>(); args.add("GEORADIUSBYMEMBER"); args.add(key)
         args.add(member); args.add("${radius}"); args.add(unit)
-        match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
+        match (count) {
+            case Some(c) =>
+                args.add("COUNT"); args.add("${c}")
+                if (any) { args.add("ANY") }
+            case None => ()
+        }
+        match (order) { case Some(o) => args.add(o) case None => () }
         if (withDist) { args.add("WITHDIST") }
         if (withCoord) { args.add("WITHCOORD") }
         let resp = executeString(collectArray(args.iterator()))
@@ -163,6 +187,7 @@ extend RedisClient {
                                fromMember!: Option<String> = None,
                                fromLonLat!: Option<(Float64, Float64)> = None,
                                radius!: Option<Float64> = None, unit!: String = "m",
+                               box!: Option<(Float64, Float64)> = None,
                                count!: Option<Int64> = None, any!: Bool = false,
                                storedist!: Bool = false): Int64 {
         let args = ArrayList<String>(); args.add("GEOSEARCHSTORE"); args.add(destination); args.add(source)
@@ -176,6 +201,11 @@ extend RedisClient {
             case None => ()
         }
         match (radius) { case Some(r) => args.add("BYRADIUS"); args.add("${r}"); args.add(unit) case None => () }
+        match (box) {
+            case Some((width, height)) =>
+                args.add("BYBOX"); args.add("${width}"); args.add("${height}"); args.add(unit)
+            case None => ()
+        }
         match (count) {
             case Some(c) =>
                 args.add("COUNT"); args.add("${c}")

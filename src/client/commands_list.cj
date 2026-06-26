@@ -72,10 +72,20 @@ extend RedisClient {
         expectBlob(resp, "LPOP")
     }
 
+    /// 移除并返回列表头部 count 个元素。
+    public func lpopCount(key: String, count: Int64): Array<Blob> {
+        parseListPopCount(executeString(["LPOP", key, "${count}"]), "LPOP count")
+    }
+
     /// 移除并返回列表尾部元素
     public func rpop(key: String): Option<Blob> {
         let resp = executeString(["RPOP", key])
         expectBlob(resp, "RPOP")
+    }
+
+    /// 移除并返回列表尾部 count 个元素。
+    public func rpopCount(key: String, count: Int64): Array<Blob> {
+        parseListPopCount(executeString(["RPOP", key, "${count}"]), "RPOP count")
     }
 
     /// 从列表中移除 count 个等于 value 的元素
@@ -190,5 +200,58 @@ extend RedisClient {
     public func brpoplpush(source: String, destination: String, timeout!: Int64 = 0): Option<Blob> {
         let resp = executeString(["BRPOPLPUSH", source, destination, "${timeout}"])
         expectBlob(resp, "BRPOPLPUSH")
+    }
+
+    /// 从多个列表弹出元素（Redis 7.0+）。
+    public func lmpop(keys: Array<String>, side!: String = "LEFT",
+                      count!: Option<Int64> = None): Option<(String, Array<Blob>)> {
+        let args = ArrayList<String>(); args.add("LMPOP"); args.add("${keys.size}")
+        for (k in keys) { args.add(k) }
+        args.add(side)
+        match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
+        parseMultiPopResult(executeString(collectArray(args.iterator())), "LMPOP")
+    }
+
+    /// 阻塞式从多个列表弹出元素（Redis 7.0+）。
+    public func blmpop(timeout: Float64, keys: Array<String>, side!: String = "LEFT",
+                       count!: Option<Int64> = None): Option<(String, Array<Blob>)> {
+        let args = ArrayList<String>(); args.add("BLMPOP"); args.add("${timeout}"); args.add("${keys.size}")
+        for (k in keys) { args.add(k) }
+        args.add(side)
+        match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
+        parseMultiPopResult(executeString(collectArray(args.iterator())), "BLMPOP")
+    }
+
+    private func parseListPopCount(resp: RESPValue, cmd: String): Array<Blob> {
+        match (resp) {
+            case RESPValue.Array(Some(items)) => extractBlobArray(items)
+            case RESPValue.Null | RESPValue.Array(None) => Array<Blob>()
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("${cmd} 返回意外类型")
+        }
+    }
+
+    private func parseMultiPopResult(resp: RESPValue, cmd: String): Option<(String, Array<Blob>)> {
+        match (resp) {
+            case RESPValue.Array(Some(items)) =>
+                if (items.size >= 2) {
+                    let key = asString(items[0])
+                    let values = match (items[1]) {
+                        case RESPValue.Array(Some(vs)) => extractBlobArray(vs)
+                        case _ => Array<Blob>()
+                    }
+                    match (key) {
+                        case Some(k) => Some((k, values))
+                        case None => None
+                    }
+                } else {
+                    None
+                }
+            case RESPValue.Null | RESPValue.Array(None) => None
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("${cmd} 返回意外类型")
+        }
     }
 }

@@ -22,8 +22,7 @@ extend RedisClient {
         for (ch in channels) {
             args.add(Blob.fromUtf8(ch))
         }
-        connection.setState(ConnectionState.Subscribed)
-        let resp = connection.execute(collectArray(args.iterator()))
+        let resp = connection.executeReturningPush(collectArray(args.iterator()))
         match (resp) {
             case RESPValue.Array(Some(items)) =>
                 if (items.size >= 3) {
@@ -33,6 +32,11 @@ extend RedisClient {
                         case _ => ()
                     }
                 }
+                connection.setState(ConnectionState.Subscribed)
+            case RESPValue.Push(_) =>
+                connection.setState(ConnectionState.Subscribed)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
             case _ => ()
         }
     }
@@ -44,8 +48,11 @@ extend RedisClient {
         for (ch in channels) {
             args.add(Blob.fromUtf8(ch))
         }
-        connection.execute(collectArray(args.iterator()))
-        connection.setState(ConnectionState.Connected)
+        let resp = connection.executeReturningPush(collectArray(args.iterator()))
+        match (remainingSubscriptionCount(resp)) {
+            case Some(0) => connection.setState(ConnectionState.Connected)
+            case _ => ()
+        }
     }
 
     /// 发布消息到频道
@@ -73,8 +80,12 @@ extend RedisClient {
         for (p in patterns) {
             args.add(Blob.fromUtf8(p))
         }
-        connection.setState(ConnectionState.Subscribed)
-        connection.execute(collectArray(args.iterator()))
+        let resp = connection.executeReturningPush(collectArray(args.iterator()))
+        match (resp) {
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => connection.setState(ConnectionState.Subscribed)
+        }
     }
 
     /// 模式退订
@@ -84,8 +95,11 @@ extend RedisClient {
         for (p in patterns) {
             args.add(Blob.fromUtf8(p))
         }
-        connection.execute(collectArray(args.iterator()))
-        connection.setState(ConnectionState.Connected)
+        let resp = connection.executeReturningPush(collectArray(args.iterator()))
+        match (remainingSubscriptionCount(resp)) {
+            case Some(0) => connection.setState(ConnectionState.Connected)
+            case _ => ()
+        }
     }
 
     // ====================================================================
@@ -120,13 +134,36 @@ extend RedisClient {
                                             case _ => ()
                                         }
                                     }
-                                case _ => ()
+	                                case _ => ()
+	                            }
+                        case Some("message") | Some("smessage") =>
+                            if (items.size >= 3) {
+                                let channel = asBlob(items[1])
+                                let message = asBlob(items[2])
+                                match ((channel, message)) {
+                                    case (Some(ch), Some(msg)) => handler(ch, msg)
+                                    case _ => ()
+                                }
+                            }
+                        case Some("pmessage") =>
+                            if (items.size >= 4) {
+                                let channel = asBlob(items[2])
+                                let message = asBlob(items[3])
+                                match ((channel, message)) {
+                                    case (Some(ch), Some(msg)) => handler(ch, msg)
+                                    case _ => ()
+                                }
                             }
                         case _ => ()
                     }
                 }
             case _ => ()
         }
+    }
+
+    /// 阻塞读取下一条 Pub/Sub Push 帧，并触发已注册的回调。
+    public func readPubSubMessage(): RESPValue {
+        connection.readNextPush()
     }
 
     // -------- PUBSUB 内省 --------
@@ -170,6 +207,40 @@ extend RedisClient {
         expectInt(executeString(["PUBSUB", "NUMPAT"]), "PUBSUB NUMPAT")
     }
 
+    /// 查看活跃分片频道（Redis 7.0+）
+    public func pubsubShardChannels(pattern!: Option<String> = None): Array<String> {
+        let args = ArrayList<String>(); args.add("PUBSUB"); args.add("SHARDCHANNELS")
+        match (pattern) { case Some(p) => args.add(p) case None => () }
+        match (executeString(collectArray(args.iterator()))) {
+            case RESPValue.Array(Some(items)) => extractStringArray(items)
+            case RESPValue.Set(items) => extractStringArray(items)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("PUBSUB SHARDCHANNELS 返回意外类型")
+        }
+    }
+
+    /// 查看分片频道订阅数（Redis 7.0+）
+    public func pubsubShardNumsub(channels: Array<String>): Array<(String, Int64)> {
+        let args = ArrayList<String>(); args.add("PUBSUB"); args.add("SHARDNUMSUB")
+        for (ch in channels) { args.add(ch) }
+        match (executeString(collectArray(args.iterator()))) {
+            case RESPValue.Array(Some(items)) => parseFlatPairs(items)
+            case RESPValue.Map(pairs) =>
+                let result = ArrayList<(String, Int64)>()
+                for ((k, v) in pairs) {
+                    match ((asString(k), asInt(v))) {
+                        case (Some(ch), Some(n)) => result.add((ch, n))
+                        case _ => ()
+                    }
+                }
+                collectArray(result.iterator())
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("PUBSUB SHARDNUMSUB 返回意外类型")
+        }
+    }
+
     /// 从扁平数组中解析键值对 [k1, v1, k2, v2, ...]
     private func parseFlatPairs(items: Array<RESPValue>): Array<(String, Int64)> {
         let result = ArrayList<(String, Int64)>()
@@ -182,6 +253,33 @@ extend RedisClient {
             i += 2
         }
         collectArray(result.iterator())
+    }
+
+    private func remainingSubscriptionCount(resp: RESPValue): Option<Int64> {
+        match (resp) {
+            case RESPValue.Array(Some(items)) =>
+                if (items.size >= 3) {
+                    asInt(items[2])
+                } else {
+                    None
+                }
+            case RESPValue.Push(items) =>
+                match (asString(items[0])) {
+                    case Some("pubsub") =>
+                        if (items.size >= 4) {
+                            asInt(items[3])
+                        } else {
+                            None
+                        }
+                    case _ =>
+                        if (items.size >= 3) {
+                            asInt(items[2])
+                        } else {
+                            None
+                        }
+                }
+            case _ => None
+        }
     }
 
     // -------- 分片 Pub/Sub (Redis 7.0+) --------
@@ -199,15 +297,22 @@ extend RedisClient {
 
         let args = ArrayList<Blob>(); args.add(Blob.fromUtf8("SSUBSCRIBE"))
         for (ch in channels) { args.add(Blob.fromUtf8(ch)) }
-        connection.setState(ConnectionState.Subscribed)
-        connection.execute(collectArray(args.iterator()))
+        let resp = connection.executeReturningPush(collectArray(args.iterator()))
+        match (resp) {
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => connection.setState(ConnectionState.Subscribed)
+        }
     }
 
     /// 退订分片频道
     public func sunsubscribe(channels: Array<String>): Unit {
         let args = ArrayList<Blob>(); args.add(Blob.fromUtf8("SUNSUBSCRIBE"))
         for (ch in channels) { args.add(Blob.fromUtf8(ch)) }
-        connection.execute(collectArray(args.iterator()))
-        connection.setState(ConnectionState.Connected)
+        let resp = connection.executeReturningPush(collectArray(args.iterator()))
+        match (remainingSubscriptionCount(resp)) {
+            case Some(0) => connection.setState(ConnectionState.Connected)
+            case _ => ()
+        }
     }
 }
