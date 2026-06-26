@@ -43,6 +43,24 @@ extend RedisClient {
         expectInt(executeString(["LASTSAVE"]), "LASTSAVE")
     }
 
+    /// 等待当前连接之前的写命令写入本机和副本 AOF。返回（本机确认数，副本确认数）。
+    public func waitAof(numLocal: Int64, numReplicas: Int64, timeout: Int64): (Int64, Int64) {
+        match (executeString(["WAITAOF", "${numLocal}", "${numReplicas}", "${timeout}"])) {
+            case RESPValue.Array(Some(items)) =>
+                if (items.size >= 2) {
+                    match ((items[0], items[1])) {
+                        case (RESPValue.Integer(local), RESPValue.Integer(replicas)) => (local, replicas)
+                        case _ => throw ProtocolError("WAITAOF 返回格式错误")
+                    }
+                } else {
+                    throw ProtocolError("WAITAOF 返回格式错误")
+                }
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("WAITAOF 返回意外类型")
+        }
+    }
+
     // -------- CLIENT 管理 --------
 
     public func clientList(typeFilter!: Option<String> = None, ids!: Array<Int64> = []): String {

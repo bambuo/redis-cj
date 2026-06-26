@@ -277,6 +277,70 @@ class CommandIntegrationTests {
         @Expect(c.hrandfield(k, 2, withValues: true).size, 2)
     }
 
+    @TestCase
+    func testHashFieldExpirationCommands() {
+        let c = createClient()
+        let k = uniqueKey("hfe")
+        c.hset(k, "f1", Blob.fromUtf8("v1"))
+        c.hset(k, "f2", Blob.fromUtf8("v2"))
+
+        let hexpired = c.hexpire(k, 60, ["f1", "f2"])
+        @Expect(hexpired.size, 2)
+        @Expect(hexpired[0] == 1 && hexpired[1] == 1, true)
+        let ttl = c.httl(k, ["f1", "missing"])
+        @Expect(ttl.size, 2)
+        @Expect(ttl[0] > 0 && ttl[1] == -2, true)
+        let pttl = c.hpttl(k, ["f1"])
+        @Expect(pttl.size, 1)
+        @Expect(pttl[0] > 0, true)
+        let expireTime = c.hexpiretime(k, ["f1"])
+        @Expect(expireTime.size, 1)
+        @Expect(expireTime[0] > 0, true)
+
+        let persisted = c.hpersist(k, ["f1"])
+        @Expect(persisted.size, 1)
+        @Expect(persisted[0], 1)
+        @Expect(c.httl(k, ["f1"])[0], -1)
+
+        @Expect(c.hpexpire(k, 60000, ["f1"])[0], 1)
+        let (sec, _) = c.time()
+        @Expect(c.hexpireat(k, sec + 60, ["f2"])[0], 1)
+        @Expect(c.hpexpireat(k, sec * 1000 + 60000, ["f1"])[0], 1)
+        @Expect(c.hpexpiretime(k, ["f1"])[0] > 0, true)
+
+        let got = c.hgetex(k, ["f1", "missing"], persist: true)
+        @Expect(got.size, 2)
+        match (got[0]) {
+            case Some(v) => @Expect(v.toUtf8(), "v1")
+            case None => @Fail("HGETEX 应返回字段值")
+        }
+        match (got[1]) {
+            case None => ()
+            case _ => @Fail("HGETEX 对不存在字段应返回 None")
+        }
+        @Expect(c.httl(k, ["f1"])[0], -1)
+
+        let deleted = c.hgetdel(k, ["f2", "missing"])
+        @Expect(deleted.size, 2)
+        match (deleted[0]) {
+            case Some(v) => @Expect(v.toUtf8(), "v2")
+            case None => @Fail("HGETDEL 应返回被删除字段值")
+        }
+        match (deleted[1]) {
+            case None => ()
+            case _ => @Fail("HGETDEL 对不存在字段应返回 None")
+        }
+        @Expect(c.hexists(k, "f2"), false)
+
+        let k2 = uniqueKey("hsetex")
+        @Expect(c.hsetex(k2, [("a", Blob.fromUtf8("1")), ("b", Blob.fromUtf8("2"))], ex: Some(60)), true)
+        @Expect(c.hsetex(k2, [("a", Blob.fromUtf8("3"))], fnx: true, ex: Some(60)), false)
+        match (c.hget(k2, "a")) {
+            case Some(v) => @Expect(v.toUtf8(), "1")
+            case None => @Fail("HSETEX 应写入字段")
+        }
+    }
+
     // -------- 有序集合命令 --------
 
     @TestCase
@@ -437,6 +501,14 @@ class CommandIntegrationTests {
         let (sec, usec) = c.time()
         @Expect(sec > 0, true)
         @Expect(usec >= 0, true)
+    }
+
+    @TestCase
+    func testWaitAof() {
+        let c = createClient()
+        let (local, replicas) = c.waitAof(0, 0, 0)
+        @Expect(local >= 0, true)
+        @Expect(replicas >= 0, true)
     }
 
     @TestCase
