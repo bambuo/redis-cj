@@ -34,23 +34,82 @@
 | 线程安全 | ✅ Mutex + synchronized 保护 |
 | 连接超时 | ✅ connectTimeout / readTimeout / writeTimeout |
 
-### 📚 命令覆盖 (~98%)
-| 类别 | 命令数 | 覆盖 |
-|------|--------|------|
-| 字符串 | 28 | 100% |
-| 列表 | 22 | 100% |
-| 哈希 | 16 | 100% |
-| 集合 | 17 | 100% |
-| 有序集合 | 31 | 100% |
-| 流 | 22 | 100% (含消费组全部命令) |
-| 地理 | 11 | 100% |
-| 脚本 | 12 | 100% |
-| 服务器 | 55 | 100% |
-| 键 | 32 | 100% |
-| 发布/订阅 | 13 | 100% (含分片) |
-| 事务 | 5 | 100% |
-| 连接 | 18 | 100% |
-| 集群客户端 | 26 | 含自动重定向 |
+### 📚 命令覆盖（客户端视角）
+
+| 分类 | 命令类别 | 具体命令 | 状态 |
+|------|----------|----------|------|
+| **核心协议** | RESP2 协议解码 | SimpleString / Error / Integer / BulkString / Array + null 变体 | ✅ |
+| | RESP3 协议解码 | Null / Boolean / Double / BigNumber / VerbatimString / BulkError / Map / Set / Push / Attribute | ✅ |
+| | RESP3 流式类型 | StreamedString / StreamedArray / StreamedSet / StreamedMap / End | ✅ |
+| | 协议编码 | 命令编码（Array of BulkStrings）/ 单值编码 / 流式分块编码 | ✅ |
+| | HELLO 自动协商 | 自动发送 HELLO 3，兼容 RESP2/RESP3 回退 | ✅ |
+| **传输层** | TCP 传输 | TcpTransport，支持连接/读写超时 | ✅ |
+| | TLS 加密传输 | TlsTransport，TLS 1.2/1.3，支持 TrustAll/CustomCA/Default 验证 | ✅ |
+| | 连接池 | ConnectionPool，maxSize / idleTimeout / 空闲驱逐 | ✅ |
+| **字符串命令** | 基本读写 | SET / GET / GETDEL / GETEX / GETSET | ✅ |
+| | 批量操作 | MGET / MSET / MSETNX | ✅ |
+| | 数值操作 | INCR / DECR / INCRBY / DECRBY / INCRBYFLOAT | ✅ |
+| | 区间操作 | APPEND / STRLEN / GETRANGE / SETRANGE | ✅ |
+| | 原子操作 | SETNX / SETEX / PSETEX | ✅ |
+| **哈希命令** | 基本读写 | HSET / HGET / HDEL / HEXISTS | ✅ |
+| | 批量操作 | HGETALL / HKEYS / HVALS / HLEN / HMGET / HMSET | ✅ |
+| | 数值操作 | HINCRBY / HINCRBYFLOAT | ✅ |
+| | 其他 | HSETNX / HSTRLEN / HRANDFIELD | ✅ |
+| **列表命令** | 推入弹出 | LPUSH / RPUSH / LPOP / RPOP | ✅ |
+| | 阻塞操作 | BLPOP / BRPOP / BLMOVE | ✅ |
+| | 查询 | LLEN / LRANGE / LINDEX / LPOS | ✅ |
+| | 修改 | LSET / LREM / LTRIM / LINSERT | ✅ |
+| | 转移 | RPOPLPUSH / LMOVE | ✅ |
+| **集合命令** | 基本操作 | SADD / SREM / SMEMBERS / SISMEMBER / SCARD | ✅ |
+| | 集合运算 | SDIFF / SINTER / SUNION / SDIFFSTORE / SINTERSTORE / SUNIONSTORE | ✅ |
+| | 随机操作 | SRANDMEMBER / SPOP | ✅ |
+| | 其他 | SMOVE | ✅ |
+| **有序集合命令** | 基本操作 | ZADD / ZREM / ZCARD / ZSCORE | ✅ |
+| | 排名 | ZRANK / ZREVRANK | ✅ |
+| | 范围查询 | ZRANGE / ZREVRANGE / ZRANGEBYSCORE / ZREVRANGEBYSCORE / ZRANGEBYLEX | ✅ |
+| | 计数 | ZCOUNT / ZLEXCOUNT | ✅ |
+| | 数值操作 | ZINCRBY | ✅ |
+| | 删除范围 | ZREMRANGEBYRANK / ZREMRANGEBYSCORE / ZREMRANGEBYLEX | ✅ |
+| | 弹出 | ZPOPMIN / ZPOPMAX / BZPOPMIN / BZPOPMAX | ✅ |
+| **流命令** | 写入读取 | XADD / XREAD / XREADGROUP | ✅ |
+| | 确认管理 | XACK / XDEL / XLEN / XCLAIM / XPENDING | ✅ |
+| | 范围查询 | XRANGE / XREVRANGE | ✅ |
+| | 组管理 | XGROUP CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER | ✅ |
+| | 信息 | XINFO STREAM / GROUPS / CONSUMERS / HELP | ✅ |
+| | 截断 | XTRIM（MAXLEN / MINID） | ✅ |
+| **地理/位图/HLL** | 地理位置 | GEOADD / GEODIST / GEOPOS / GEOHASH / GEORADIUS / GEOSEARCH | ✅ |
+| | 位图 | BITCOUNT / BITPOS / GETBIT / SETBIT / BITOP | ✅ |
+| | HyperLogLog | PFADD / PFCOUNT / PFMERGE | ✅ |
+| **脚本命令** | 执行 | EVAL / EVALSHA / EVALSHA_RO / EVAL_RO | ✅ |
+| | 管理 | SCRIPT LOAD / SCRIPT EXISTS / SCRIPT FLUSH / SCRIPT KILL | ✅ |
+| **服务器命令** | 基本信息 | PING / ECHO / TIME / DBSIZE / INFO / ROLE | ✅ |
+| | 数据库操作 | FLUSHDB / FLUSHALL / SWAPDB / SELECT | ✅ |
+| | 配置 | CONFIG GET / CONFIG SET / CONFIG RESETSTAT | ✅ |
+| | 客户端管理 | CLIENT SETNAME / GETNAME / ID / LIST / KILL / PAUSE / UNPAUSE | ✅ |
+| | 慢日志 | SLOWLOG GET / LEN / RESET | ✅ |
+| | 监控 | MONITOR / LASTSAVE / MEMORY / LATENCY | ✅ |
+| | 模块 | MODULE LIST / LOAD / UNLOAD | ✅ |
+| | 其他 | COMMAND / COMMAND COUNT / COMMAND GETKEYS / COMMAND INFO | ✅ |
+| **键管理命令** | 生命周期 | DEL / UNLINK / EXISTS / TOUCH / EXPIRE / EXPIREAT / PEXPIRE / PEXPIREAT / PERSIST / TTL / PTTL | ✅ |
+| | 操作 | TYPE / RENAME / RENAMENX / COPY / SORT / MOVE | ✅ |
+| | 其他 | OBJECT / DUMP / RESTORE / WAIT / MIGRATE | ✅ |
+| **连接管理命令** | 认证 | AUTH / HELLO | ✅ |
+| | 连接 | PING / ECHO / QUIT / SELECT | ✅ |
+| **发布/订阅** | 订阅管理 | SUBSCRIBE / UNSUBSCRIBE / PSUBSCRIBE / PUNSUBSCRIBE | ✅ |
+| | 分片订阅 | SSUBSCRIBE / SUNSUBSCRIBE / SPUBLISH（Redis 7.0+） | ✅ |
+| | 发布 | PUBLISH / SPUBLISH | ✅ |
+| | 内省 | PUBSUB CHANNELS / NUMSUB / NUMPAT / SHARDCHANNELS / SHARDNUMSUB | ✅ |
+| **事务命令** | 生命周期 | MULTI / EXEC / DISCARD | ✅ |
+| | 监视 | WATCH / UNWATCH | ✅ |
+| **高级特性** | Pipeline 流水线 | 批量发送→批量读取，减少 RTT | ✅ |
+| | SCAN 迭代器 | SCAN / HSCAN / SSCAN / ZSCAN，支持 MATCH / COUNT | ✅ |
+| | 集群客户端 | MOVED 自动重定向 / ASK 重定向 / CRC16 槽位计算 / HashTag | ✅ |
+| | 错误工厂 | 按错误前缀分发至 WrongTypeError / AuthError / MovedError 等子类 | ✅ |
+| **模块扩展** | RedisJSON | JSON.SET / JSON.GET / JSON.ARRAPPEND 等 | |
+| | RediSearch | FT.SEARCH / FT.CREATE / FT.AGGREGATE 等 | |
+| | RedisTimeSeries | TS.CREATE / TS.ADD / TS.RANGE 等 | |
+| | RedisGraph | GRAPH.QUERY / GRAPH.EXPLAIN 等 | |
+| | RedisBloom | BF.ADD / BF.EXISTS / CMS.INITBYDIM 等 | |
 
 ---
 
@@ -276,8 +335,8 @@ main() {
 | `.gitignore` | ✅ 已添加 |
 | `README.md` | ✅ 中英文文档 |
 | 单元测试 | ✅ 187 通过 |
-| 命令覆盖 | ✅ ~98% |
-| RESP2/RESP3 协议 | ✅ 全部 17 种类型 |
+| 命令覆盖 | ✅ 全部核心 Redis 命令 |
+| RESP2/RESP3 协议 | ✅ 全部 17 种 RESP 值类型 |
 
 当前仓颉语言已支持**中央仓库**分发。构建时 `cjpm` 自动从中央仓库解析版本依赖并下载。如需使用本地开发版本，可临时替换为 `path` 依赖。
 
