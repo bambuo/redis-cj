@@ -369,6 +369,30 @@ class DecoderTests {
 
     // -------- 健壮性 --------
 
+    /// \r 后非 \n 应抛异常（SimpleString）
+    @TestCase
+    func readLineEmbeddedCRThrows() {
+        // +hello\rx\r\n → \r 后接 'x' 不是 \n
+        let dec = decoderFromBytes(Blob.fromUtf8("+hello\rx\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// 连续 \r\r\n 应抛异常（第二个 \r 后应为 \n）
+    @TestCase
+    func readLineDoubleCRThrows() {
+        // +hello\r\r\n → 第一个 \r 后接第二个 \r
+        let dec = decoderFromBytes(Blob.fromUtf8("+hello\r\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// collectRestOfLine 检测到无效 CRLF 应抛异常
+    @TestCase
+    func bulkStringCRNotFollowedByLFThrows() {
+        // $3\rX\r\nHi\r\n → \r 后接 'X' 不是 \n
+        let dec = decoderFromBytes(Blob.fromUtf8("$3\rX\r\nHi\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
     /// skipCRLF 验证失败应抛异常
     @TestCase
     func skipCRLFValidation() {

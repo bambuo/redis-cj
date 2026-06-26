@@ -68,6 +68,7 @@ public class RespDecoder {
     ///
     /// 注意：只应在预期有 CRLF 终止的行数据时调用
     /// （SimpleString、Error、Integer 的数值部分、长度前缀等）
+    /// 如果 \r 后不是 \n，视为协议错误。
     private func readLine(): Array<Byte> {
         let result = ArrayList<Byte>()
         while (true) {
@@ -77,9 +78,9 @@ public class RespDecoder {
                 if (next == 0x0Au8) {
                     break
                 }
-                // \r 后不是 \n，作为普通数据处理
-                result.add(b)
-                result.add(next)
+                throw ProtocolError(
+                    "无效的 RESP 行终止：期望 \\r\\n，但 \\r 后接 0x${Int64(next)}"
+                )
             } else {
                 result.add(b)
             }
@@ -170,7 +171,6 @@ public class RespDecoder {
                 RESPValue.Integer(n)
 
             case b'$' =>  // Bulk String or Streamed String
-                let peekBuf = ArrayList<Byte>()
                 // 预读：检查是数字还是 '?'
                 let ch = readByte()
                 if (ch == 0x3Fu8) {  // '?' → 流式字符串
@@ -199,7 +199,6 @@ public class RespDecoder {
                 }
 
             case b'*' =>  // Array or Null Array or Streamed Array
-                let peekBuf = ArrayList<Byte>()
                 let ch = readByte()
                 if (ch == 0x3Fu8) {  // '?' → 流式数组
                     skipCRLF()
@@ -508,6 +507,7 @@ public class RespDecoder {
     // ====================================================================
 
     /// 收集行的剩余部分（已读取第一个字符后继续读取直到 CRLF）
+    /// 如果 \r 后不是 \n，视为协议错误。
     private func collectRestOfLine(acc: ArrayList<Byte>): Unit {
         while (true) {
             let b = readByte()
@@ -516,8 +516,9 @@ public class RespDecoder {
                 if (next == 0x0Au8) {
                     break
                 }
-                acc.add(b)
-                acc.add(next)
+                throw ProtocolError(
+                    "无效的 RESP 行终止：期望 \\r\\n，但 \\r 后接 0x${Int64(next)}"
+                )
             } else {
                 acc.add(b)
             }
