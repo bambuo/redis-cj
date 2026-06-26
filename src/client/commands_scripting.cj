@@ -32,6 +32,10 @@ extend RedisClient {
         expectBlobVal(resp, "SCRIPT LOAD").toUtf8()
     }
 
+    public func scriptHelp(): Array<String> {
+        expectStringArray(executeString(["SCRIPT", "HELP"]), "SCRIPT HELP")
+    }
+
     /// 检查脚本是否已缓存
     public func scriptExists(sha1s: Array<String>): Array<Bool> {
         let args = ArrayList<String>(); args.add("SCRIPT"); args.add("EXISTS")
@@ -101,5 +105,84 @@ extend RedisClient {
         for (k in keys) { cmd.add(k) }
         for (a in args) { cmd.add(a) }
         executeString(collectArray(cmd.iterator()))
+    }
+
+    /// 加载函数库（Redis 7.0+），返回库名称。
+    public func functionLoad(libraryCode: String, replace!: Bool = false): String {
+        let args = ArrayList<String>(); args.add("FUNCTION"); args.add("LOAD")
+        if (replace) { args.add("REPLACE") }
+        args.add(libraryCode)
+        match (executeString(collectArray(args.iterator()))) {
+            case RESPValue.SimpleString(name) => name
+            case RESPValue.BulkString(Some(blob)) => blob.toUtf8()
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case resp => throw ProtocolError("FUNCTION LOAD 返回意外类型: ${respValueToString(resp)}")
+        }
+    }
+
+    public func functionHelp(): Array<String> {
+        expectStringArray(executeString(["FUNCTION", "HELP"]), "FUNCTION HELP")
+    }
+
+    /// 列出函数库（Redis 7.0+）。
+    public func functionList(libraryNamePattern!: Option<String> = None,
+                             withCode!: Bool = false): Array<RESPValue> {
+        let args = ArrayList<String>(); args.add("FUNCTION"); args.add("LIST")
+        match (libraryNamePattern) {
+            case Some(pattern) => args.add("LIBRARYNAME"); args.add(pattern)
+            case None => ()
+        }
+        if (withCode) { args.add("WITHCODE") }
+        match (executeString(collectArray(args.iterator()))) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("FUNCTION LIST 返回意外类型")
+        }
+    }
+
+    /// 删除函数库（Redis 7.0+）。
+    public func functionDelete(libraryName: String): Unit {
+        expectOK(executeString(["FUNCTION", "DELETE", libraryName]), "FUNCTION DELETE")
+    }
+
+    /// 清空函数库（Redis 7.0+）。
+    public func functionFlush(mode!: Option<String> = None): Unit {
+        let args = ArrayList<String>(); args.add("FUNCTION"); args.add("FLUSH")
+        match (mode) { case Some(m) => args.add(m) case None => () }
+        expectOK(executeString(collectArray(args.iterator())), "FUNCTION FLUSH")
+    }
+
+    /// 返回函数运行状态统计（Redis 7.0+）。
+    public func functionStats(): RESPValue {
+        let resp = executeString(["FUNCTION", "STATS"])
+        match (resp) {
+            case RESPValue.Array(_) | RESPValue.Map(_) => resp
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("FUNCTION STATS 返回意外类型")
+        }
+    }
+
+    /// 导出所有函数库（Redis 7.0+）。
+    public func functionDump(): Blob {
+        expectBlobVal(executeString(["FUNCTION", "DUMP"]), "FUNCTION DUMP")
+    }
+
+    /// 从 DUMP 结果恢复函数库（Redis 7.0+）。
+    public func functionRestore(serialized: Blob, policy!: Option<String> = None): Unit {
+        let args = ArrayList<Blob>()
+        args.add(Blob.fromUtf8("FUNCTION")); args.add(Blob.fromUtf8("RESTORE")); args.add(serialized)
+        match (policy) {
+            case Some(p) => args.add(Blob.fromUtf8(p))
+            case None => ()
+        }
+        expectOK(execute(collectArray(args.iterator())), "FUNCTION RESTORE")
+    }
+
+    /// 终止正在运行的函数（Redis 7.0+）。
+    public func functionKill(): Unit {
+        expectOK(executeString(["FUNCTION", "KILL"]), "FUNCTION KILL")
     }
 }

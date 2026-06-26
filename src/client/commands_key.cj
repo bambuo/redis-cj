@@ -137,9 +137,11 @@ extend RedisClient {
                         replace!: Bool = false,
                         absTtl!: Bool = false,
                         idleTime!: Option<Int64> = None,
-                        freq!: Option<Int64> = None): Unit {
+                        freq!: Option<Int64> = None,
+                        asking!: Bool = false): Unit {
         let args = ArrayList<Blob>()
-        args.add(Blob.fromUtf8("RESTORE")); args.add(Blob.fromUtf8(key))
+        args.add(Blob.fromUtf8(if (asking) { "RESTORE-ASKING" } else { "RESTORE" }))
+        args.add(Blob.fromUtf8(key))
         args.add(Blob.fromUtf8("${ttl}")); args.add(serializedValue)
         if (replace) { args.add(Blob.fromUtf8("REPLACE")) }
         if (absTtl) { args.add(Blob.fromUtf8("ABSTTL")) }
@@ -153,6 +155,14 @@ extend RedisClient {
         }
         let resp = execute(collectArray(args.iterator()))
         expectOK(resp, "RESTORE")
+    }
+
+    public func restoreAsking(key: String, ttl: Int64, serializedValue: Blob,
+                              replace!: Bool = false,
+                              absTtl!: Bool = false,
+                              idleTime!: Option<Int64> = None,
+                              freq!: Option<Int64> = None): Unit {
+        restore(key, ttl, serializedValue, replace: replace, absTtl: absTtl, idleTime: idleTime, freq: freq, asking: true)
     }
 
     // -------- 排序 --------
@@ -313,8 +323,16 @@ extend RedisClient {
         expectBlobVal(executeString(["OBJECT", "ENCODING", key]), "OBJECT ENCODING").toUtf8()
     }
 
+    public func objectHelp(): Array<String> {
+        expectStringArray(executeString(["OBJECT", "HELP"]), "OBJECT HELP")
+    }
+
     public func objectIdletime(key: String): Int64 {
         expectInt(executeString(["OBJECT", "IDLETIME", key]), "OBJECT IDLETIME")
+    }
+
+    public func objectFreq(key: String): Int64 {
+        expectInt(executeString(["OBJECT", "FREQ", key]), "OBJECT FREQ")
     }
 
     public func objectRefcount(key: String): Int64 {

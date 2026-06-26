@@ -106,6 +106,16 @@ extend RedisClient {
         }
     }
 
+    /// 获取成员排名及分值（Redis 7.2+）
+    public func zrankWithScore(key: String, member: Blob): Option<(Int64, Float64)> {
+        parseRankWithScore(execute([
+            Blob.fromUtf8("ZRANK"),
+            Blob.fromUtf8(key),
+            member,
+            Blob.fromUtf8("WITHSCORE"),
+        ]), "ZRANK WITHSCORE")
+    }
+
     public func zrevrank(key: String, member: Blob): Option<Int64> {
         let resp = execute([Blob.fromUtf8("ZREVRANK"), Blob.fromUtf8(key), member])
         match (resp) {
@@ -114,6 +124,16 @@ extend RedisClient {
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("ZREVRANK 返回意外类型")
         }
+    }
+
+    /// 获取成员逆序排名及分值（Redis 7.2+）
+    public func zrevrankWithScore(key: String, member: Blob): Option<(Int64, Float64)> {
+        parseRankWithScore(execute([
+            Blob.fromUtf8("ZREVRANK"),
+            Blob.fromUtf8(key),
+            member,
+            Blob.fromUtf8("WITHSCORE"),
+        ]), "ZREVRANK WITHSCORE")
     }
 
     public func zincrby(key: String, increment: Float64, member: Blob): Float64 {
@@ -154,6 +174,30 @@ extend RedisClient {
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("ZRANGE WITHSCORES 返回意外类型")
         }
+    }
+
+    /// 使用 ZRANGE 现代参数读取成员（Redis 6.2+）
+    public func zrangeAdvanced(key: String, start: String, stop: String,
+                               byScore!: Bool = false,
+                               byLex!: Bool = false,
+                               rev!: Bool = false,
+                               limit!: Option<(Int64, Int64)> = None): Array<Blob> {
+        let resp = executeString(buildZRangeArgs(key, start, stop, byScore, byLex, rev, limit, false))
+        match (resp) {
+            case RESPValue.Array(Some(items)) => extractBlobArray(items)
+            case RESPValue.Set(items) => extractBlobArray(items)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("ZRANGE 返回意外类型")
+        }
+    }
+
+    /// 使用 ZRANGE 现代参数读取成员及分值（Redis 6.2+）
+    public func zrangeAdvancedWithScores(key: String, start: String, stop: String,
+                                         byScore!: Bool = false,
+                                         rev!: Bool = false,
+                                         limit!: Option<(Int64, Int64)> = None): Array<(Blob, Float64)> {
+        parseScorePairs(executeString(buildZRangeArgs(key, start, stop, byScore, false, rev, limit, true)))
     }
 
     public func zrevrange(key: String, start: Int64, stop: Int64): Array<Blob> {
@@ -199,6 +243,31 @@ extend RedisClient {
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("ZREVRANGEBYLEX 返回意外类型")
         }
+    }
+
+    /// 将 ZRANGE 结果存入目标有序集合（Redis 6.2+）
+    public func zrangestore(destination: String, source: String, min: String, max: String,
+                            byScore!: Bool = false,
+                            byLex!: Bool = false,
+                            rev!: Bool = false,
+                            limit!: Option<(Int64, Int64)> = None): Int64 {
+        let args = ArrayList<String>()
+        args.add("ZRANGESTORE")
+        args.add(destination)
+        args.add(source)
+        args.add(min)
+        args.add(max)
+        if (byScore) { args.add("BYSCORE") }
+        if (byLex) { args.add("BYLEX") }
+        if (rev) { args.add("REV") }
+        match (limit) {
+            case Some((offset, count)) =>
+                args.add("LIMIT")
+                args.add("${offset}")
+                args.add("${count}")
+            case None => ()
+        }
+        expectInt(executeString(collectArray(args.iterator())), "ZRANGESTORE")
     }
 
     // -------- 计数 --------
@@ -399,6 +468,48 @@ extend RedisClient {
     }
 
     // -------- 辅助 --------
+
+    private func buildZRangeArgs(key: String, start: String, stop: String,
+                                 byScore: Bool, byLex: Bool, rev: Bool,
+                                 limit: Option<(Int64, Int64)>, withScores: Bool): Array<String> {
+        let args = ArrayList<String>()
+        args.add("ZRANGE")
+        args.add(key)
+        args.add(start)
+        args.add(stop)
+        if (byScore) { args.add("BYSCORE") }
+        if (byLex) { args.add("BYLEX") }
+        if (rev) { args.add("REV") }
+        match (limit) {
+            case Some((offset, count)) =>
+                args.add("LIMIT")
+                args.add("${offset}")
+                args.add("${count}")
+            case None => ()
+        }
+        if (withScores) { args.add("WITHSCORES") }
+        collectArray(args.iterator())
+    }
+
+    private func parseRankWithScore(resp: RESPValue, cmd: String): Option<(Int64, Float64)> {
+        match (resp) {
+            case RESPValue.Array(Some(items)) =>
+                if (items.size >= 2) {
+                    match ((asInt(items[0]), parseScoreValue(items[1]))) {
+                        case (Some(rank), Some(score)) => Some((rank, score))
+                        case _ => None
+                    }
+                } else {
+                    None
+                }
+            case RESPValue.Array(None) => None
+            case RESPValue.Null => None
+            case RESPValue.BulkString(None) => None
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("${cmd} 返回意外类型")
+        }
+    }
 
     private func parseScorePairs(resp: RESPValue): Array<(Blob, Float64)> {
         let items = match (resp) {

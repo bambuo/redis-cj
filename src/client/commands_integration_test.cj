@@ -121,6 +121,27 @@ class CommandIntegrationTests {
             case Some(n) => @Expect(n, 65)
             case None => @Fail("BITFIELD_RO failed")
         }
+        @Expect(c.bitCount(k, start: Some(0), end: Some(7), unit: Some("BIT")), 2)
+        @Expect(c.bitpos(k, true, start: Some(0), end: Some(7), unit: Some("BIT")), 1)
+    }
+
+    @TestCase
+    func testLcs() {
+        let c = createClient()
+        let k1 = uniqueKey("lcs1")
+        let k2 = uniqueKey("lcs2")
+        c.set(k1, Blob.fromUtf8("ohmytext"))
+        c.set(k2, Blob.fromUtf8("mynewtext"))
+        let value = c.lcs(k1, k2)
+        match (value) {
+            case Some(blob) => @Expect(blob.toUtf8().size > 0, true)
+            case None => @Fail("LCS 应返回公共子序列")
+        }
+        @Expect(c.lcsLen(k1, k2) > 0, true)
+        match (c.lcsIdx(k1, k2)) {
+            case RESPValue.Array(_) | RESPValue.Map(_) => ()
+            case _ => @Fail("LCS IDX 返回类型异常")
+        }
     }
 
     // -------- 列表命令 --------
@@ -307,6 +328,18 @@ class CommandIntegrationTests {
             case Some(v) => @Expect(v > 4.49 && v < 4.51, true)
             case None => @Fail("ZADD INCR failed")
         }
+        match (c.zrankWithScore(k, Blob.fromUtf8("a"))) {
+            case Some((rank, score)) =>
+                @Expect(rank, 0)
+                @Expect(score > 4.49 && score < 4.51, true)
+            case None => @Fail("ZRANK WITHSCORE failed")
+        }
+        match (c.zrevrankWithScore(k, Blob.fromUtf8("a"))) {
+            case Some((rank, score)) =>
+                @Expect(rank, 0)
+                @Expect(score > 4.49 && score < 4.51, true)
+            case None => @Fail("ZREVRANK WITHSCORE failed")
+        }
     }
 
     @TestCase
@@ -323,6 +356,18 @@ class CommandIntegrationTests {
                 @Expect(values.size, 2)
             case None => @Fail("ZMPOP failed")
         }
+    }
+
+    @TestCase
+    func testZRangeStore() {
+        let c = createClient()
+        let src = uniqueKey("zrs")
+        let dst = uniqueKey("zrsdst")
+        c.zadd(src, [(1.0, Blob.fromUtf8("a")), (2.0, Blob.fromUtf8("b")), (3.0, Blob.fromUtf8("c"))])
+        @Expect(c.zrangestore(dst, src, "0", "1"), 2)
+        @Expect(c.zcard(dst), 2)
+        @Expect(c.zrangeAdvanced(src, "2", "3", byScore: true).size, 2)
+        @Expect(c.zrangeAdvancedWithScores(src, "2", "3", byScore: true).size, 2)
     }
 
     // -------- 流命令 --------
@@ -409,11 +454,47 @@ class CommandIntegrationTests {
     }
 
     @TestCase
+    func testConfigGetManyAndCommandListNames() {
+        let c = createClient()
+        let configs = c.configGetMany(["timeout", "databases"])
+        @Expect(configs.size >= 2, true)
+        let commands = c.commandListNames(filterBy: Some(("ACLCAT", "string")))
+        @Expect(commands.size > 0, true)
+    }
+
+    @TestCase
+    func testLatencyReadOnlyDiagnostics() {
+        let c = createClient()
+        @Expect(c.latencyLatest().size >= 0, true)
+        @Expect(c.latencyDoctor().size > 0, true)
+        match (c.latencyHistogram()) {
+            case RESPValue.Array(_) | RESPValue.Map(_) => ()
+            case _ => @Fail("LATENCY HISTOGRAM 返回类型异常")
+        }
+    }
+
+    @TestCase
+    func testHelpCommands() {
+        let c = createClient()
+        @Expect(c.clientHelp().size > 0, true)
+        @Expect(c.configHelp().size > 0, true)
+        @Expect(c.commandHelp().size > 0, true)
+        @Expect(c.memoryHelp().size > 0, true)
+        @Expect(c.aclHelp().size > 0, true)
+        @Expect(c.slowLogHelp().size > 0, true)
+        @Expect(c.latencyHelp().size > 0, true)
+        @Expect(c.pubsubHelp().size > 0, true)
+        @Expect(c.objectHelp().size > 0, true)
+        @Expect(c.scriptHelp().size > 0, true)
+        @Expect(c.functionHelp().size > 0, true)
+    }
+
+    @TestCase
     func testFlushDB() {
         let c = createClient()
         let k = uniqueKey("fdb")
         c.set(k, Blob.fromUtf8("x"))
-        c.flushDb()
+        c.flushDb(mode: Some("SYNC"))
         let v = c.get(k)
         match (v) { case None => () case _ => @Fail("FLUSHDB 应删除键") }
     }
@@ -434,12 +515,20 @@ class CommandIntegrationTests {
         let c = createClient()
         let redir = c.clientGetRedir()
         @Expect(redir >= -1, true)
+        @Expect(c.clientInfo().size > 0, true)
         let info = c.clientTrackingInfo()
         match (info) {
             case RESPValue.Array(_) | RESPValue.Map(_) => ()
             case _ => @Fail("CLIENT TRACKINGINFO 返回类型异常")
         }
         @Expect(c.aclWhoami().size > 0, true)
+    }
+
+    @TestCase
+    func testAclDryRun() {
+        let c = createClient()
+        c.aclDryRun(c.aclWhoami(), ["PING"])
+        @Expect(true, true)
     }
 
     // -------- 事务命令 --------
@@ -551,6 +640,24 @@ class CommandIntegrationTests {
     }
 
     @TestCase
+    func testRestoreAsking() {
+        let c = createClient()
+        let source = uniqueKey("dump")
+        let target = uniqueKey("restore")
+        c.set(source, Blob.fromUtf8("v"))
+        let payload = c.dump(source)
+        match (payload) {
+            case Some(blob) =>
+                c.restoreAsking(target, 0, blob, replace: true)
+                match (c.get(target)) {
+                    case Some(value) => @Expect(value.toUtf8(), "v")
+                    case None => @Fail("RESTORE ASKING 应恢复键")
+                }
+            case None => @Fail("DUMP 应返回序列化值")
+        }
+    }
+
+    @TestCase
     func testTouch() {
         let c = createClient()
         let k = uniqueKey("tk")
@@ -581,6 +688,36 @@ class CommandIntegrationTests {
         @Expect(exists[0], true)
         c.scriptFlush(mode: Some("SYNC"))
         @Expect(c.scriptExists([sha])[0], false)
+    }
+
+    @TestCase
+    func testFunctionLifecycle() {
+        let c = createClient()
+        let lib = uniqueKey("lib")
+        let funcName = uniqueKey("fn")
+        try { c.functionDelete(lib) } catch (_: Exception) { () }
+
+        let code = "#!lua name=${lib}\nredis.register_function('${funcName}', function(keys, args) return args[1] end)"
+        @Expect(c.functionLoad(code), lib)
+        let result = c.fcall(funcName, args: ["ok"])
+        match (result) {
+            case RESPValue.BulkString(Some(blob)) => @Expect(blob.toUtf8(), "ok")
+            case RESPValue.SimpleString(s) => @Expect(s, "ok")
+            case _ => @Fail("FCALL 返回类型异常")
+        }
+        @Expect(c.functionList(libraryNamePattern: Some(lib)).size, 1)
+        match (c.functionStats()) {
+            case RESPValue.Array(_) | RESPValue.Map(_) => ()
+            case _ => @Fail("FUNCTION STATS 返回类型异常")
+        }
+
+        let dump = c.functionDump()
+        @Expect(dump.size > 0, true)
+        c.functionDelete(lib)
+        @Expect(c.functionList(libraryNamePattern: Some(lib)).size, 0)
+        c.functionRestore(dump, policy: Some("REPLACE"))
+        @Expect(c.functionList(libraryNamePattern: Some(lib)).size, 1)
+        c.functionDelete(lib)
     }
 
     @TestCase
@@ -661,5 +798,17 @@ class CommandIntegrationTests {
             count: Some(2)
         )
         @Expect(results.size > 0, true)
+    }
+
+    @TestCase
+    func testGeoRadiusReadOnly() {
+        let c = createClient()
+        let k = uniqueKey("gro")
+        c.geoadd(k, [(13.361389, 38.115556, Blob.fromUtf8("Palermo")),
+                     (15.087269, 37.502669, Blob.fromUtf8("Catania"))])
+        let byPoint = c.georadiusRo(k, 15.0, 37.0, 500.0, unit: "km", count: Some(2))
+        @Expect(byPoint.size > 0, true)
+        let byMember = c.georadiusbymemberRo(k, "Palermo", 500.0, unit: "km", count: Some(2))
+        @Expect(byMember.size > 0, true)
     }
 }

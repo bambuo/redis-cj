@@ -12,6 +12,19 @@ extend RedisClient {
         expectInt(resp, "CLIENT ID")
     }
 
+    /// 获取当前连接的 CLIENT INFO 文本（Redis 6.2+）
+    public func clientInfo(): String {
+        let resp = executeString(["CLIENT", "INFO"])
+        match (resp) {
+            case RESPValue.BulkString(Some(blob)) => blob.toUtf8()
+            case RESPValue.SimpleString(s) => s
+            case RESPValue.VerbatimString(_, blob) => blob.toUtf8()
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("CLIENT INFO 返回意外类型")
+        }
+    }
+
     /// 获取当前连接的客户端缓存失效重定向目标
     public func clientGetRedir(): Int64 {
         let resp = executeString(["CLIENT", "GETREDIR"])
@@ -37,6 +50,26 @@ extend RedisClient {
             case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
             case _ => resp
         }
+    }
+
+    /// 设置当前连接的下一条命令是否用于客户端缓存追踪
+    public func clientCaching(enabled: Bool): Unit {
+        expectOK(executeString(["CLIENT", "CACHING", if (enabled) { "YES" } else { "NO" }]), "CLIENT CACHING")
+    }
+
+    /// 取消 CLIENT PAUSE
+    public func clientUnpause(): Unit {
+        expectOK(executeString(["CLIENT", "UNPAUSE"]), "CLIENT UNPAUSE")
+    }
+
+    /// 设置当前连接是否禁止被淘汰（Redis 7.0+）
+    public func clientNoEvict(enabled: Bool): Unit {
+        expectOK(executeString(["CLIENT", "NO-EVICT", if (enabled) { "ON" } else { "OFF" }]), "CLIENT NO-EVICT")
+    }
+
+    /// 设置当前连接是否不刷新键空闲时间（Redis 7.2+）
+    public func clientNoTouch(enabled: Bool): Unit {
+        expectOK(executeString(["CLIENT", "NO-TOUCH", if (enabled) { "ON" } else { "OFF" }]), "CLIENT NO-TOUCH")
     }
 
     /// 上报客户端库名称（Redis 7.2+）

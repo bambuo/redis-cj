@@ -91,6 +91,21 @@ extend RedisClient {
         }
     }
 
+    /// 集群 ASK 重定向前置确认
+    public func asking(): Unit {
+        expectOK(executeString(["ASKING"]), "ASKING")
+    }
+
+    /// 将当前集群连接标记为只读
+    public func readonly(): Unit {
+        expectOK(executeString(["READONLY"]), "READONLY")
+    }
+
+    /// 将当前集群连接恢复为读写
+    public func readwrite(): Unit {
+        expectOK(executeString(["READWRITE"]), "READWRITE")
+    }
+
     /// 退出连接
     public func quit(): Unit {
         try {

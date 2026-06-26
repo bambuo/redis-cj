@@ -106,6 +106,18 @@ public func expectArray(resp: RESPValue, cmd: String): Option<Array<RESPValue>> 
     }
 }
 
+/// 期望字符串数组响应
+public func expectStringArray(resp: RESPValue, cmd: String): Array<String> {
+    match (resp) {
+        case RESPValue.Array(Some(items)) => extractStringArray(items)
+        case RESPValue.Array(None) => []
+        case RESPValue.Set(items) => extractStringArray(items)
+        case RESPValue.Error(e) => throw createCommandError(e)
+        case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+        case _ => throw ProtocolError("${cmd}: 期望字符串数组，但收到 ${respValueToString(resp)}")
+    }
+}
+
 /// 期望 Map 或 Array（RESP2 兼容）响应
 public func expectMapOrArray(resp: RESPValue, cmd: String): RESPValue {
     match (resp) {

@@ -183,6 +183,37 @@ extend RedisClient {
         expectInt(resp, "SETRANGE")
     }
 
+    /// 获取两个字符串值的最长公共子序列（Redis 7.0+）
+    public func lcs(key1: String, key2: String): Option<Blob> {
+        expectBlob(executeString(["LCS", key1, key2]), "LCS")
+    }
+
+    /// 获取两个字符串值最长公共子序列的长度（Redis 7.0+）
+    public func lcsLen(key1: String, key2: String): Int64 {
+        expectInt(executeString(["LCS", key1, key2, "LEN"]), "LCS LEN")
+    }
+
+    /// 获取两个字符串值最长公共子序列的索引信息（Redis 7.0+）
+    public func lcsIdx(key1: String, key2: String,
+                       minMatchLen!: Option<Int64> = None,
+                       withMatchLen!: Bool = false): RESPValue {
+        let args = ArrayList<String>(); args.add("LCS"); args.add(key1); args.add(key2); args.add("IDX")
+        match (minMatchLen) {
+            case Some(n) =>
+                args.add("MINMATCHLEN")
+                args.add("${n}")
+            case None => ()
+        }
+        if (withMatchLen) { args.add("WITHMATCHLEN") }
+        let resp = executeString(collectArray(args.iterator()))
+        match (resp) {
+            case RESPValue.Array(_) | RESPValue.Map(_) => resp
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("LCS IDX: 期望 Array/Map，但收到 ${respValueToString(resp)}")
+        }
+    }
+
     // -------- 批量操作 --------
 
     /// 批量获取多个键的值。顺序与 keys 一致，不存在的键返回 None。
@@ -266,7 +297,8 @@ extend RedisClient {
     }
 
     /// 统计字符串中为 1 的位数
-    public func bitCount(key: String, start!: Option<Int64> = None, end!: Option<Int64> = None): Int64 {
+    public func bitCount(key: String, start!: Option<Int64> = None, end!: Option<Int64> = None,
+                         unit!: Option<String> = None): Int64 {
         let args = ArrayList<String>()
         args.add("BITCOUNT"); args.add(key)
         match (start) {
@@ -275,6 +307,10 @@ extend RedisClient {
         }
         match (end) {
             case Some(e) => args.add("${e}")
+            case None => ()
+        }
+        match (unit) {
+            case Some(u) => args.add(u)
             case None => ()
         }
         let resp = executeString(collectArray(args.iterator()))
@@ -375,11 +411,12 @@ extend RedisClient {
 
     /// 查找第一个为 0 或 1 的位
     public func bitpos(key: String, bit: Bool, start!: Option<Int64> = None,
-                       end!: Option<Int64> = None): Int64 {
+                       end!: Option<Int64> = None, unit!: Option<String> = None): Int64 {
         let args = ArrayList<String>(); args.add("BITPOS"); args.add(key)
         args.add(if (bit) { "1" } else { "0" })
         match (start) { case Some(s) => args.add("${s}") case None => () }
         match (end) { case Some(e) => args.add("${e}") case None => () }
+        match (unit) { case Some(u) => args.add(u) case None => () }
         let resp = executeString(collectArray(args.iterator()))
         expectInt(resp, "BITPOS")
     }

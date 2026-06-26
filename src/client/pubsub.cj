@@ -168,6 +168,10 @@ extend RedisClient {
 
     // -------- PUBSUB 内省 --------
 
+    public func pubsubHelp(): Array<String> {
+        expectStringArray(executeString(["PUBSUB", "HELP"]), "PUBSUB HELP")
+    }
+
     /// 查看活跃频道
     public func pubsubChannels(pattern!: Option<String> = None): Array<String> {
         let args = ArrayList<String>(); args.add("PUBSUB"); args.add("CHANNELS")

@@ -279,6 +279,18 @@ extend ClusterClient {
         expectBlobVal(resp, "CLUSTER INFO").toUtf8()
     }
 
+    /// 获取集群分片拓扑（Redis 7.0+）
+    public func clusterShards(): Array<RESPValue> {
+        let resp = execute(stringsToBlobs(["CLUSTER", "SHARDS"]))
+        match (resp) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("CLUSTER SHARDS 返回意外类型")
+        }
+    }
+
     /// 获取指定槽位中的键数量
     public func clusterCountKeysinslot(slot: Int64): Int64 {
         let resp = execute(stringsToBlobs(["CLUSTER", "COUNTKEYSINSLOT", "${slot}"]))

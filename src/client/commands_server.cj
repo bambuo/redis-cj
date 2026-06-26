@@ -49,6 +49,10 @@ extend RedisClient {
         expectBlobVal(executeString(["CLIENT", "LIST"]), "CLIENT LIST").toUtf8()
     }
 
+    public func clientHelp(): Array<String> {
+        expectStringArray(executeString(["CLIENT", "HELP"]), "CLIENT HELP")
+    }
+
     public func clientSetName(name: String): Unit {
         expectOK(executeString(["CLIENT", "SETNAME", name]), "CLIENT SETNAME")
     }
@@ -83,7 +87,25 @@ extend RedisClient {
     // -------- CONFIG 管理 --------
 
     public func configGet(pattern: String): Array<(String, String)> {
-        match (executeString(["CONFIG", "GET", pattern])) {
+        configGetMany([pattern])
+    }
+
+    public func configHelp(): Array<String> {
+        expectStringArray(executeString(["CONFIG", "HELP"]), "CONFIG HELP")
+    }
+
+    /// 获取多个配置项（Redis 7.0+ 支持多参数）
+    public func configGetMany(parameters: Array<String>): Array<(String, String)> {
+        if (parameters.size == 0) {
+            throw ProtocolError("CONFIG GET 至少需要一个参数")
+        }
+        let args = ArrayList<String>(); args.add("CONFIG"); args.add("GET")
+        for (p in parameters) { args.add(p) }
+        parseConfigGetResult(executeString(collectArray(args.iterator())))
+    }
+
+    private func parseConfigGetResult(resp: RESPValue): Array<(String, String)> {
+        match (resp) {
             case RESPValue.Array(Some(items)) =>
                 let result = ArrayList<(String, String)>()
                 var i: Int64 = 0
@@ -95,6 +117,7 @@ extend RedisClient {
                     i += 2
                 }
                 collectArray(result.iterator())
+            case RESPValue.Array(None) => []
             case RESPValue.Map(pairs) =>
                 // RESP3: Map 类型
                 let result = ArrayList<(String, String)>()
@@ -105,8 +128,20 @@ extend RedisClient {
                     }
                 }
                 collectArray(result.iterator())
-            case RESPValue.Error(e) => throw CommandError(e)
-            case _ => throw ProtocolError("CONFIG GET 返回意外类型")
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("CONFIG GET: 期望 Array/Map，但收到 ${respValueToString(resp)}")
+        }
+    }
+
+    private func expectText(resp: RESPValue, cmd: String): String {
+        match (resp) {
+            case RESPValue.BulkString(Some(blob)) => blob.toUtf8()
+            case RESPValue.SimpleString(s) => s
+            case RESPValue.VerbatimString(_, blob) => blob.toUtf8()
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("${cmd}: 期望文本响应，但收到 ${respValueToString(resp)}")
         }
     }
 
@@ -141,6 +176,62 @@ extend RedisClient {
         expectOK(executeString(["SLOWLOG", "RESET"]), "SLOWLOG RESET")
     }
 
+    public func slowLogHelp(): Array<String> {
+        expectStringArray(executeString(["SLOWLOG", "HELP"]), "SLOWLOG HELP")
+    }
+
+    // -------- LATENCY --------
+
+    public func latencyLatest(): Array<RESPValue> {
+        match (executeString(["LATENCY", "LATEST"])) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("LATENCY LATEST 返回意外类型")
+        }
+    }
+
+    public func latencyHistory(event: String): Array<RESPValue> {
+        match (executeString(["LATENCY", "HISTORY", event])) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("LATENCY HISTORY 返回意外类型")
+        }
+    }
+
+    public func latencyDoctor(): String {
+        expectText(executeString(["LATENCY", "DOCTOR"]), "LATENCY DOCTOR")
+    }
+
+    public func latencyGraph(event: String): String {
+        expectText(executeString(["LATENCY", "GRAPH", event]), "LATENCY GRAPH")
+    }
+
+    public func latencyHistogram(commands!: Array<String> = []): RESPValue {
+        let args = ArrayList<String>(); args.add("LATENCY"); args.add("HISTOGRAM")
+        for (c in commands) { args.add(c) }
+        let resp = executeString(collectArray(args.iterator()))
+        match (resp) {
+            case RESPValue.Array(_) | RESPValue.Map(_) => resp
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("LATENCY HISTOGRAM 返回意外类型")
+        }
+    }
+
+    public func latencyReset(events!: Array<String> = []): Int64 {
+        let args = ArrayList<String>(); args.add("LATENCY"); args.add("RESET")
+        for (e in events) { args.add(e) }
+        expectInt(executeString(collectArray(args.iterator())), "LATENCY RESET")
+    }
+
+    public func latencyHelp(): Array<String> {
+        expectStringArray(executeString(["LATENCY", "HELP"]), "LATENCY HELP")
+    }
+
     // -------- COMMAND --------
 
     /// 获取命令信息
@@ -152,6 +243,10 @@ extend RedisClient {
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("COMMAND INFO 返回意外类型")
         }
+    }
+
+    public func commandHelp(): Array<String> {
+        expectStringArray(executeString(["COMMAND", "HELP"]), "COMMAND HELP")
     }
 
     /// 获取命令文档（Redis 7.0+）
@@ -187,6 +282,26 @@ extend RedisClient {
         }
     }
 
+    /// 获取命令名称列表（Redis 7.0+ COMMAND LIST）
+    public func commandListNames(filterBy!: Option<(String, String)> = None): Array<String> {
+        let args = ArrayList<String>(); args.add("COMMAND"); args.add("LIST")
+        match (filterBy) {
+            case Some((filter, value)) =>
+                args.add("FILTERBY")
+                args.add(filter)
+                args.add(value)
+            case None => ()
+        }
+        let resp = executeString(collectArray(args.iterator()))
+        match (resp) {
+            case RESPValue.Array(Some(items)) => extractStringArray(items)
+            case RESPValue.Set(items) => extractStringArray(items)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("COMMAND LIST: 期望 Array/Set，但收到 ${respValueToString(resp)}")
+        }
+    }
+
     /// 获取命令对应的键（用于集群路由）
     public func commandGetKeys(command: Array<String>): Array<String> {
         let args = ArrayList<String>(); args.add("COMMAND"); args.add("GETKEYS")
@@ -208,6 +323,22 @@ extend RedisClient {
             case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
             case _ => throw ProtocolError("COMMAND GETKEYSANDFLAGS 返回意外类型")
         }
+    }
+
+    // -------- CLUSTER 查询 --------
+
+    public func clusterShards(): Array<RESPValue> {
+        match (executeString(["CLUSTER", "SHARDS"])) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Array(None) => []
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("CLUSTER SHARDS 返回意外类型")
+        }
+    }
+
+    public func clusterHelp(): Array<String> {
+        expectStringArray(executeString(["CLUSTER", "HELP"]), "CLUSTER HELP")
     }
 
     // -------- MEMORY --------
@@ -247,6 +378,10 @@ extend RedisClient {
         expectOK(executeString(["MEMORY", "PURGE"]), "MEMORY PURGE")
     }
 
+    public func memoryHelp(): Array<String> {
+        expectStringArray(executeString(["MEMORY", "HELP"]), "MEMORY HELP")
+    }
+
     // -------- ACL --------
 
     /// 列出 ACL 规则
@@ -257,6 +392,10 @@ extend RedisClient {
             case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
             case _ => throw ProtocolError("ACL LIST 返回意外类型")
         }
+    }
+
+    public func aclHelp(): Array<String> {
+        expectStringArray(executeString(["ACL", "HELP"]), "ACL HELP")
     }
 
     /// 列出 ACL 用户
@@ -324,6 +463,16 @@ extend RedisClient {
         }
     }
 
+    /// 试运行指定用户执行命令的 ACL 权限
+    public func aclDryRun(username: String, command: Array<String>): Unit {
+        if (command.size == 0) {
+            throw ProtocolError("ACL DRYRUN 至少需要一个命令")
+        }
+        let args = ArrayList<String>(); args.add("ACL"); args.add("DRYRUN"); args.add(username)
+        for (a in command) { args.add(a) }
+        expectOK(executeString(collectArray(args.iterator())), "ACL DRYRUN")
+    }
+
     // -------- 持久化 --------
 
     /// 同步保存到磁盘
@@ -372,6 +521,15 @@ extend RedisClient {
 
     // -------- 数据库管理 --------
 
-    public func flushDb(): Unit { expectOK(executeString(["FLUSHDB"]), "FLUSHDB") }
-    public func flushAll(): Unit { expectOK(executeString(["FLUSHALL"]), "FLUSHALL") }
+    public func flushDb(mode!: Option<String> = None): Unit {
+        let args = ArrayList<String>(); args.add("FLUSHDB")
+        match (mode) { case Some(m) => args.add(m) case None => () }
+        expectOK(executeString(collectArray(args.iterator())), "FLUSHDB")
+    }
+
+    public func flushAll(mode!: Option<String> = None): Unit {
+        let args = ArrayList<String>(); args.add("FLUSHALL")
+        match (mode) { case Some(m) => args.add(m) case None => () }
+        expectOK(executeString(collectArray(args.iterator())), "FLUSHALL")
+    }
 }

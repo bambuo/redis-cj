@@ -156,6 +156,35 @@ extend RedisClient {
         }
     }
 
+    /// 以指定经纬度为中心只读查找成员
+    public func georadiusRo(key: String, longitude: Float64, latitude: Float64,
+                            radius: Float64, unit!: String = "m",
+                            withDist!: Bool = false, withCoord!: Bool = false,
+                            count!: Option<Int64> = None,
+                            order!: Option<String> = None,
+                            any!: Bool = false): Array<RESPValue> {
+        let args = ArrayList<String>(); args.add("GEORADIUS_RO"); args.add(key)
+        args.add("${longitude}"); args.add("${latitude}")
+        args.add("${radius}"); args.add(unit)
+        match (count) {
+            case Some(c) =>
+                args.add("COUNT"); args.add("${c}")
+                if (any) { args.add("ANY") }
+            case None => ()
+        }
+        match (order) { case Some(o) => args.add(o) case None => () }
+        if (withDist) { args.add("WITHDIST") }
+        if (withCoord) { args.add("WITHCOORD") }
+        let resp = executeString(collectArray(args.iterator()))
+        match (resp) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Set(items) => items
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("GEORADIUS_RO 返回意外类型")
+        }
+    }
+
     /// 以指定成员为中心查找附近成员
     public func georadiusbymember(key: String, member: String, radius: Float64,
                                   unit!: String = "m",
@@ -179,6 +208,34 @@ extend RedisClient {
             case RESPValue.Array(Some(items)) => items
             case RESPValue.Error(e) => throw CommandError(e)
             case _ => throw ProtocolError("GEORADIUSBYMEMBER 返回意外类型")
+        }
+    }
+
+    /// 以指定成员为中心只读查找附近成员
+    public func georadiusbymemberRo(key: String, member: String, radius: Float64,
+                                    unit!: String = "m",
+                                    withDist!: Bool = false, withCoord!: Bool = false,
+                                    count!: Option<Int64> = None,
+                                    order!: Option<String> = None,
+                                    any!: Bool = false): Array<RESPValue> {
+        let args = ArrayList<String>(); args.add("GEORADIUSBYMEMBER_RO"); args.add(key)
+        args.add(member); args.add("${radius}"); args.add(unit)
+        match (count) {
+            case Some(c) =>
+                args.add("COUNT"); args.add("${c}")
+                if (any) { args.add("ANY") }
+            case None => ()
+        }
+        match (order) { case Some(o) => args.add(o) case None => () }
+        if (withDist) { args.add("WITHDIST") }
+        if (withCoord) { args.add("WITHCOORD") }
+        let resp = executeString(collectArray(args.iterator()))
+        match (resp) {
+            case RESPValue.Array(Some(items)) => items
+            case RESPValue.Set(items) => items
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("GEORADIUSBYMEMBER_RO 返回意外类型")
         }
     }
 
