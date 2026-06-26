@@ -16,8 +16,8 @@ public class MockTransport <: Transport {
     public func close(): Unit {}
     public func isConnected(): Bool { true }
     public func remoteAddress(): String { "mock:0" }
-    public func setReadTimeout(_timeout: Option<Duration>): Unit {}
-    public func setWriteTimeout(_timeout: Option<Duration>): Unit {}
+    public func setReadTimeout(timeout: Option<Duration>): Unit {} // cjlint-ignore !G.FUN.02 模拟实现
+    public func setWriteTimeout(timeout: Option<Duration>): Unit {} // cjlint-ignore !G.FUN.02 模拟实现
 
     public func read(buf: Array<Byte>): Int64 {
         var count: Int64 = 0
@@ -29,7 +29,7 @@ public class MockTransport <: Transport {
         count
     }
 
-    public func write(_buf: Array<Byte>): Unit {}
+    public func write(buf: Array<Byte>): Unit {} // cjlint-ignore !G.FUN.02 模拟实现
 }
 
 /// RESP 编码器单元测试
