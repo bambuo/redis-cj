@@ -4,9 +4,9 @@
 [![Cangjie](https://img.shields.io/badge/language-Cangjie%201.1.3-orange)](cangjie-lang.cn)
 [![Redis](https://img.shields.io/badge/Redis-RESP2%2FRESP3-red)](redis.io)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen)
-![Tests](https://img.shields.io/badge/tests-127%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-187%20passing-brightgreen)
 
-基于**仓颉编程语言**实现的完整 Redis 协议客户端，支持 **RESP2 + RESP3** 全协议、Pipeline、事务、Pub/Sub、集群等所有核心功能。
+基于**仓颉编程语言**实现的完整 Redis 协议客户端，支持 **RESP2 + RESP3** 全协议、Pipeline、事务、Pub/Sub、集群、**TLS 加密传输**等所有核心功能。
 
 ---
 
@@ -29,6 +29,7 @@
 | Pub/Sub 发布订阅 | ✅ 含分片 Pub/Sub (Redis 7.0+) |
 | SCAN 游标迭代器 | ✅ SCAN/HSCAN/SSCAN/ZSCAN |
 | 连接池 | ✅ 最大连接数/空闲超时/健康检查 |
+| TLS 加密传输 | ✅ 基于 stdx.net.tls，支持 TLS 1.2/1.3 |
 | 集群 | ✅ MOVED/ASK 自动重定向 + CRC16 槽位计算 + HashTag |
 | 线程安全 | ✅ Mutex + synchronized 保护 |
 | 连接超时 | ✅ connectTimeout / readTimeout / writeTimeout |
@@ -79,8 +80,8 @@ flowchart BT
     end
     subgraph 传输层
         TCP
+        TLS
     end
-    Transport["TCP / TLS"] -.-> 传输层
     传输层 --> 协议层
     协议层 --> 连接层
     连接层 --> 特性层
@@ -108,6 +109,8 @@ flowchart BT
 ### 环境要求
 
 - [仓颉编译器](https://cangjie-lang.cn) 1.1.3+
+- [扩展标准库](https://gitcode.com/Cangjie/cangjie_stdx/releases) stdx 1.1.3+
+- [OpenSSL 3](https://www.openssl.org/)（TLS 连接时需要）
 - Redis 服务器 6.0+（推荐 7.0+）
 
 ### 编译与运行
@@ -129,60 +132,62 @@ cjpm test
 ```cangjie
 import redis.client.*
 
-// cjpm.toml
-[dependencies]
-redis = { git = "https://github.com/your-org/redis-cj.git", tag = "v1.0.0" }
-
-main() {
-    // 字符串操作
-    client.set("key", Blob.fromUtf8("你好，仓颉！"))
+// 普通 TCP 连接
+try (client = RedisClient("127.0.0.1", 6379u16)) {
+    client.set("key", Blob.fromUtf8("value"))
     let val = client.get("key")
     println(val.getOrThrow())
+
+    // Pipeline
+    let results = client.pipeline([
+        ["INCR", "counter"],
+        ["GET", "counter"],
+    ])
+
+    // 事务
+    let txn = Transaction(client)
+    .watch(["key1"]).multi()
+    .queue(["SET", "key1", "val1"])
+    .queue(["GET", "key1"])
+    let txnResults = txn.exec()
 
     // 列表操作
     client.lpush("mylist", [Blob.fromUtf8("a"), Blob.fromUtf8("b")])
     let items = client.lrange("mylist", 0, -1)
 
-    // 哈希操作
-    client.hset("myhash", "field1", Blob.fromUtf8("value1"))
-    let all = client.hgetAll("myhash")
-
-    // 事务
-    let txn = Transaction(client)
-    txn.watch(["key1"])
-    txn.multi()
-    txn.queue(["SET", "key1", "val1"])
-    txn.queue(["GET", "key1"])
-    let results = txn.exec()
-
-    // Pipeline
-    let pipeResults = client.pipeline([
-        ["INCR", "counter"],
-        ["INCR", "counter"],
-        ["GET", "counter"],
-    ])
-
     // Pub/Sub
-    client.subscribe(["channel"]) { type, channel, message =>
-        println("收到消息: ${channel} → ${message}")
+    client.subscribe(["channel"]) { ch, msg =>
+        println("收到: ${ch} → ${msg}")
     }
     client.publish("channel", Blob.fromUtf8("Hello!"))
 
     // SCAN 迭代
-    let scanner = ScanIterator(client)
-    while (true) {
-        match (scanner.next()) {
-            case Some(keys) =>
-                for (key in keys) { println(key) }
-            case None => break
-        }
+    let scanner = ScanIterator(client, pattern: "user:*")
+    for (keys in scanner) {
+        for (key in keys) { println(key) }
     }
+}
 
-    // 集群客户端
-    try (cluster = ClusterClient(["127.0.0.1:7000"])) {
-        cluster.set("key", Blob.fromUtf8("value"))
-        let v = cluster.get("key")
-    }
+// TLS 加密连接
+try (client = RedisClient.withTls("redis.example.com", 6380u16)) {
+    client.ping()  // → PONG
+    client.set("secure_key", Blob.fromUtf8("加密传输"))
+}
+
+// TLS + 自定义证书验证
+import stdx.net.tls.*
+import stdx.net.tls.common.CertificateVerifyMode
+
+var config = TlsClientConfig()
+config.verifyMode = CertificateVerifyMode.TrustAll  // 仅测试环境
+let transport = TlsTransport("host", 6380, tlsConfig: config)
+let conn = RedisConnection(transport)
+let client = RedisClient(conn)
+
+// 集群客户端
+try (cluster = ClusterClient(["127.0.0.1:7000"])) {
+    cluster.set("key", Blob.fromUtf8("value"))
+    let v = cluster.get("key")
 }
 ```
 
@@ -208,6 +213,7 @@ redis-cj/
     ├── resp_decoder.cj             # RESP 解码器（流式/属性/Push）
     ├── transport_iface.cj          # Transport 接口
     ├── transport_tcp.cj            # TCP 传输实现
+    ├── transport_tls.cj            # TLS 加密传输实现
     ├── conn_state.cj               # 连接状态枚举
     ├── conn_connection.cj          # Redis 连接（状态机 + HELLO）
     ├── conn_pool.cj                # 连接池
@@ -230,6 +236,7 @@ redis-cj/
     ├── commands_connection.cj      # 连接命令
     ├── cluster_slot_map.cj         # 集群槽位映射 + CRC16
     ├── cluster_client.cj           # 集群客户端
+    ├── transport_tls_test.cj       # TLS 传输单元测试
     ├── *_test.cj                   # 单元测试文件
     └── commands_integration_test.cj# 集成测试
 ```
@@ -243,7 +250,7 @@ redis-cj/
 ```toml
 # cjpm.toml
 [dependencies]
-redis = { git = "https://github.com/your-org/redis-cj.git", tag = "v1.0.0" }
+redis = "1.0.20260626"
 ```
 
 ```cangjie
@@ -263,17 +270,35 @@ main() {
 | 项目 | 状态 |
 |------|------|
 | `cjpm.toml` 包名 `name` | ✅ `redis` |
-| `cjpm.toml` 组织 `organization` | ✅ 已设置 |
-| `cjpm.toml` 版本号 `version` | ✅ `1.0.0` |
+| `cjpm.toml` 版本号 `version` | ✅ `1.0.20260626` |
 | 源文件 `package` 声明一致 | ✅ 全部 `redis.client` |
 | `LICENSE` 许可证文件 | ✅ Apache 2.0 |
 | `.gitignore` | ✅ 已添加 |
 | `README.md` | ✅ 中英文文档 |
-| 单元测试 | ✅ 127 通过 |
+| 单元测试 | ✅ 187 通过 |
 | 命令覆盖 | ✅ ~98% |
 | RESP2/RESP3 协议 | ✅ 全部 17 种类型 |
 
-当前仓颉语言通过 **Git 依赖** 分发包（`cjpm.toml` 支持 `git` 与 `path` 协议），暂无中央仓库。将项目推送到 GitHub 后，其他项目即可通过 Git 依赖引用。
+当前仓颉语言已支持**中央仓库**分发。构建时 `cjpm` 自动从中央仓库解析版本依赖并下载。如需使用本地开发版本，可临时替换为 `path` 依赖。
+
+### 构建配置说明
+
+TLS 支持依赖于仓颉扩展标准库 `stdx.net.tls`（底层使用 OpenSSL 3）。`cjpm.toml` 中已配置各平台的构建参数：
+
+| 平台 | 依赖路径 | 编译选项 |
+|------|----------|----------|
+| macOS aarch64 | `${CANGJIE_STDX_PATH}` | `-Woff unused -Woff deprecated` |
+| Linux aarch64 | `${CANGJIE_STDX_PATH}` | `-Woff unused -Woff deprecated -ldl` |
+| Linux x86_64 | `${CANGJIE_STDX_PATH}` | `-Woff unused -Woff deprecated -ldl` |
+| Windows x86_64 | `${CANGJIE_STDX_PATH}` | `-Woff unused -Woff deprecated -lcrypt32` |
+
+构建前需设置环境变量 `CANGJIE_STDX_PATH` 指向本地 stdx 路径，例如：
+
+```bash
+export CANGJIE_STDX_PATH=/path/to/cangjie/stdx/static/stdx
+```
+
+> **注意**：`CANGJIE_STDX_PATH` 需指向 `stdx/static/stdx` 或 `stdx/dynamic/stdx` 子目录，具体取决于项目 `output-type`。
 
 ---
 
