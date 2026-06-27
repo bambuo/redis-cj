@@ -15,6 +15,7 @@ public class ConnectionPool <: Resource {
     private let port: UInt16
     private let maxSize: Int64
     private let idleTimeout: Duration
+    private let healthCheck: Bool
     private var idle: ArrayList<PooledConnection>
     private var activeCount: Int64
     private var closed: Bool
@@ -26,13 +27,16 @@ public class ConnectionPool <: Resource {
     /// @param port Redis 服务器端口
     /// @param maxSize 最大连接数（默认 10）
     /// @param idleTimeout 空闲连接超时（默认 5 分钟）
+    /// @param healthCheck 复用空闲连接前是否发送 PING 探活
     public init(host: String, port: UInt16,
                 maxSize!: Int64 = 10,
-                idleTimeout!: Duration = Duration.minute * 5) {
+                idleTimeout!: Duration = Duration.minute * 5,
+                healthCheck!: Bool = true) {
         this.host = host
         this.port = port
         this.maxSize = maxSize
         this.idleTimeout = idleTimeout
+        this.healthCheck = healthCheck
         this.idle = ArrayList<PooledConnection>()
         this.activeCount = 0
         this.closed = false
@@ -59,11 +63,11 @@ public class ConnectionPool <: Resource {
             // 尝试从空闲队列获取
             while (idle.size > 0) {
                 let pc = idle.remove(at: idle.size - 1)
-                if (!pc.conn.isClosed()) {
+                if (isReusable(pc.conn)) {
                     activeCount++
                     return pc.conn
                 }
-                // 连接已关闭，丢弃
+                pc.conn.close()
             }
 
             // 检查是否达到最大连接数
@@ -95,6 +99,11 @@ public class ConnectionPool <: Resource {
                 return
             }
             if (conn.isClosed()) {
+                if (activeCount > 0) { activeCount-- }
+                return
+            }
+            if (!isConnectedState(conn)) {
+                conn.close()
                 if (activeCount > 0) { activeCount-- }
                 return
             }
@@ -151,6 +160,31 @@ public class ConnectionPool <: Resource {
             } else {
                 i++
             }
+        }
+    }
+
+    /// 对空闲连接做 Redis PING 探活，避免复用半开连接。
+    private func isReusable(conn: RedisConnection): Bool {
+        !conn.isClosed() && isConnectedState(conn) && isHealthy(conn)
+    }
+
+    private func isConnectedState(conn: RedisConnection): Bool {
+        match (conn.getState()) {
+            case ConnectionState.Connected => true
+            case _ => false
+        }
+    }
+
+    private func isHealthy(conn: RedisConnection): Bool {
+        if (!healthCheck) { return true }
+        try {
+            match (conn.execute([Blob.fromUtf8("PING")])) {
+                case RESPValue.SimpleString("PONG") => true
+                case RESPValue.BulkString(Some(blob)) => blob.toUtf8() == "PONG"
+                case _ => false
+            }
+        } catch (_) {
+            false
         }
     }
 }

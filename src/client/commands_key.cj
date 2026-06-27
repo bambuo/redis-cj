@@ -244,6 +244,16 @@ extend RedisClient {
         parseScanResult(executeString(collectArray(args.iterator())))
     }
 
+    /// 渐进式扫描哈希表字段和值，返回结构化 field/value 对。
+    public func hscanEntries(key: String, cursor: Int64, pattern!: Option<String> = None,
+                             count!: Option<Int64> = None): (Int64, Array<(String, Blob)>) {
+        let args = ArrayList<String>(); args.add("HSCAN"); args.add(key); args.add("${cursor}")
+        match (pattern) { case Some(p) => args.add("MATCH"); args.add(p) case None => () }
+        match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
+        let (nextCursor, items) = parseScanItems(executeString(collectArray(args.iterator())), "HSCAN")
+        (nextCursor, parseHashScanEntries(items))
+    }
+
     /// 渐进式扫描集合成员
     public func sscan(key: String, cursor: Int64, pattern!: Option<String> = None,
                       count!: Option<Int64> = None): (Int64, Array<String>) {
@@ -260,6 +270,16 @@ extend RedisClient {
         match (pattern) { case Some(p) => args.add("MATCH"); args.add(p) case None => () }
         match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
         parseScanResult(executeString(collectArray(args.iterator())))
+    }
+
+    /// 渐进式扫描有序集合成员和分值，返回结构化 member/score 对。
+    public func zscanWithScores(key: String, cursor: Int64, pattern!: Option<String> = None,
+                                count!: Option<Int64> = None): (Int64, Array<(Blob, Float64)>) {
+        let args = ArrayList<String>(); args.add("ZSCAN"); args.add(key); args.add("${cursor}")
+        match (pattern) { case Some(p) => args.add("MATCH"); args.add(p) case None => () }
+        match (count) { case Some(c) => args.add("COUNT"); args.add("${c}") case None => () }
+        let (nextCursor, items) = parseScanItems(executeString(collectArray(args.iterator())), "ZSCAN")
+        (nextCursor, parseZSetScanEntries(items))
     }
 
     // -------- 随机与杂项 --------
@@ -281,20 +301,51 @@ extend RedisClient {
     // -------- 辅助 --------
 
     private func parseScanResult(resp: RESPValue): (Int64, Array<String>) {
+        let (cursor, items) = parseScanItems(resp, "SCAN")
+        (cursor, extractStringArray(items))
+    }
+
+    private func parseScanItems(resp: RESPValue, cmd: String): (Int64, Array<RESPValue>) {
         match (resp) {
             case RESPValue.Array(Some(items)) =>
                 if (items.size >= 2) {
                     let cursorStr = asString(items[0]).getOrThrow()
                     let newCursor = Int64.parse(cursorStr)
-                    let keys = match (items[1]) {
-                        case RESPValue.Array(Some(k)) => extractStringArray(k)
-                        case _ => Array<String>()
+                    let values = match (items[1]) {
+                        case RESPValue.Array(Some(k)) => k
+                        case _ => Array<RESPValue>()
                     }
-                    (newCursor, keys)
-                } else { (0, Array<String>()) }
+                    (newCursor, values)
+                } else { (0, Array<RESPValue>()) }
             case RESPValue.Error(e) => throw CommandError(e)
-            case _ => throw ProtocolError("SCAN 返回意外类型")
+            case _ => throw ProtocolError("${cmd} 返回意外类型")
         }
+    }
+
+    private func parseHashScanEntries(items: Array<RESPValue>): Array<(String, Blob)> {
+        let result = ArrayList<(String, Blob)>()
+        var i: Int64 = 0
+        while (i + 1 < items.size) {
+            match ((asString(items[i]), asBlob(items[i + 1]))) {
+                case (Some(field), Some(value)) => result.add((field, value))
+                case _ => throw ProtocolError("HSCAN 返回字段/值格式错误")
+            }
+            i += 2
+        }
+        collectArray(result.iterator())
+    }
+
+    private func parseZSetScanEntries(items: Array<RESPValue>): Array<(Blob, Float64)> {
+        let result = ArrayList<(Blob, Float64)>()
+        var i: Int64 = 0
+        while (i + 1 < items.size) {
+            match ((asBlob(items[i]), asString(items[i + 1]))) {
+                case (Some(member), Some(score)) => result.add((member, Float64.parse(score)))
+                case _ => throw ProtocolError("ZSCAN 返回成员/分值格式错误")
+            }
+            i += 2
+        }
+        collectArray(result.iterator())
     }
 // removed premature close
 

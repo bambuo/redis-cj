@@ -923,6 +923,37 @@ class CommandIntegrationTests {
         let (cursor, keys) = c.scan(0)
         @Expect(cursor >= 0, true)
         @Expect(keys.size >= 2, true)
+
+        let hk = uniqueKey("hscan")
+        c.hset(hk, "f1", Blob.fromUtf8("v1"))
+        c.hset(hk, "f2", Blob.fromUtf8("v2"))
+        let (_, entries) = c.hscanEntries(hk, 0)
+        var foundHash = false
+        for ((field, value) in entries) {
+            if (field == "f1" && value.toUtf8() == "v1") {
+                foundHash = true
+            }
+        }
+        @Expect(foundHash, true)
+
+        let hashIter = ScanIterator.forHash(c, hk)
+        let hashEntries = hashIter.collectHashEntries()
+        @Expect(hashEntries.size >= 2, true)
+
+        let zk = uniqueKey("zscan")
+        c.zadd(zk, [(1.5, Blob.fromUtf8("m1")), (2.5, Blob.fromUtf8("m2"))])
+        let (_, zitems) = c.zscanWithScores(zk, 0)
+        var foundZset = false
+        for ((member, score) in zitems) {
+            if (member.toUtf8() == "m1" && score > 1.4 && score < 1.6) {
+                foundZset = true
+            }
+        }
+        @Expect(foundZset, true)
+
+        let zIter = ScanIterator.forSortedSet(c, zk)
+        let zEntries = zIter.collectSortedSetEntries()
+        @Expect(zEntries.size >= 2, true)
     }
 
     // -------- Geo --------

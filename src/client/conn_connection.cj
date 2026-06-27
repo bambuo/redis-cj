@@ -322,13 +322,25 @@ public class RedisConnection <: Resource {
     // 属性（供包内扩展使用）
     // ====================================================================
 
-    public func getState(): ConnectionState { state }
-    internal func setState(s: ConnectionState): Unit { state = s }
+    public func getState(): ConnectionState {
+        synchronized (lock) {
+            state
+        }
+    }
+
+    internal func setState(s: ConnectionState): Unit {
+        synchronized (lock) {
+            state = s
+        }
+    }
+
     internal func getDecoder(): RespDecoder { decoder }
     internal func getTransport(): Transport { transport }
 
     /// 获取最后一次命令执行的 RESP3 属性数据
     public func getAttributes(): Option<Array<(RESPValue, RESPValue)>> {
-        lastAttributes
+        synchronized (lock) {
+            lastAttributes
+        }
     }
 }

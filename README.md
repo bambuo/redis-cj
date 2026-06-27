@@ -111,7 +111,7 @@
 | **事务命令** | 生命周期 | MULTI / EXEC / DISCARD | ✅ |
 | | 监视 | WATCH / UNWATCH | ✅ |
 | **高级特性** | Pipeline 流水线 | 批量发送→批量读取，减少 RTT | ✅ |
-| | SCAN 迭代器 | SCAN / HSCAN / SSCAN / ZSCAN，支持 MATCH / COUNT | ✅ |
+| | SCAN 迭代器 | SCAN / HSCAN / SSCAN / ZSCAN，支持 MATCH / COUNT 与 HSCAN/ZSCAN 结构化结果 | ✅ |
 | | 集群客户端 | MOVED 自动重定向 / ASK 重定向 / CRC16 槽位计算 / HashTag | ✅ |
 | | 错误工厂 | 按错误前缀分发至 WrongTypeError / AuthError / MovedError 等子类 | ✅ |
 | **模块扩展** | RedisJSON | JSON.SET / JSON.GET / JSON.ARRAPPEND 等 | 非客户端 P0 |
@@ -278,7 +278,7 @@ redis-cj/
         ├── utils_blob.cj           # Blob 二进制安全类型
         ├── utils_errors.cj         # 错误类型层次
         ├── utils_scan_iter.cj      # SCAN 游标迭代器
-        ├── resp_types.cj           # RESP 值类型枚举（17 种变体）
+        ├── resp_types.cj           # RESP 值类型枚举（wire 类型 + Attribute 包装）
         ├── resp_encoder.cj         # RESP 编码器
         ├── resp_decoder.cj         # RESP 解码器（流式/属性/Push）
         ├── transport_iface.cj      # Transport 接口
@@ -346,7 +346,7 @@ main() {
 | `README.md` | ✅ 中英文文档 |
 | 单元测试 | ✅ 251 通过 |
 | 命令覆盖 | ✅ 纯客户端核心 Redis 能力 |
-| RESP2/RESP3 协议 | ✅ 全部 17 种 RESP 值类型 |
+| RESP2/RESP3 协议 | ✅ RESP2/RESP3 wire 类型完整覆盖 |
 
 当前仓颉语言已支持**中央仓库**分发。构建时 `cjpm` 自动从中央仓库解析版本依赖并下载。如需使用本地开发版本，可临时替换为 `path` 依赖。
 

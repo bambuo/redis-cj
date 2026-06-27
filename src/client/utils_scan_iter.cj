@@ -73,6 +73,41 @@ public class ScanIterator {
     /// 获取下一批扫描结果
     /// @return Option<Array<String>> 有剩余数据时返回 Some(keys)，扫描完成返回 None
     public func next(): Option<Array<String>> {
+        match (nextItems()) {
+            case Some(items) =>
+                let result = extractStringArray(items)
+                if (result.size == 0 && done) { None } else { Some(result) }
+            case None => None
+        }
+    }
+
+    /// 获取下一批 HSCAN 字段和值。
+    public func nextHashEntries(): Option<Array<(String, Blob)>> {
+        if (cmdType != "HSCAN") {
+            throw ProtocolError("nextHashEntries 仅适用于 HSCAN 迭代器")
+        }
+        match (nextItems()) {
+            case Some(items) =>
+                let result = parseHashEntries(items)
+                if (result.size == 0 && done) { None } else { Some(result) }
+            case None => None
+        }
+    }
+
+    /// 获取下一批 ZSCAN 成员和分值。
+    public func nextSortedSetEntries(): Option<Array<(Blob, Float64)>> {
+        if (cmdType != "ZSCAN") {
+            throw ProtocolError("nextSortedSetEntries 仅适用于 ZSCAN 迭代器")
+        }
+        match (nextItems()) {
+            case Some(items) =>
+                let result = parseSortedSetEntries(items)
+                if (result.size == 0 && done) { None } else { Some(result) }
+            case None => None
+        }
+    }
+
+    private func nextItems(): Option<Array<RESPValue>> {
         if (done) { return None }
 
         let args = ArrayList<String>()
@@ -93,9 +128,8 @@ public class ScanIterator {
                     this.cursor = Int64.parse(cursorStr)
                     if (this.cursor == 0) { this.done = true }
                     match (items[1]) {
-                        case RESPValue.Array(Some(keys)) =>
-                            let result = extractStringArray(keys)
-                            if (result.size == 0 && this.done) { None } else { Some(result) }
+                        case RESPValue.Array(Some(values)) =>
+                            if (values.size == 0 && this.done) { None } else { Some(values) }
                         case _ => None
                     }
                 } else { None }
@@ -129,5 +163,61 @@ public class ScanIterator {
             }
         }
         collectArray(all.iterator())
+    }
+
+    public func collectHashEntries(): Array<(String, Blob)> {
+        if (cmdType != "HSCAN") {
+            throw ProtocolError("collectHashEntries 仅适用于 HSCAN 迭代器")
+        }
+        let all = ArrayList<(String, Blob)>()
+        while (true) {
+            match (nextHashEntries()) {
+                case Some(items) =>
+                    for (item in items) { all.add(item) }
+                case None => break
+            }
+        }
+        collectArray(all.iterator())
+    }
+
+    public func collectSortedSetEntries(): Array<(Blob, Float64)> {
+        if (cmdType != "ZSCAN") {
+            throw ProtocolError("collectSortedSetEntries 仅适用于 ZSCAN 迭代器")
+        }
+        let all = ArrayList<(Blob, Float64)>()
+        while (true) {
+            match (nextSortedSetEntries()) {
+                case Some(items) =>
+                    for (item in items) { all.add(item) }
+                case None => break
+            }
+        }
+        collectArray(all.iterator())
+    }
+
+    private func parseHashEntries(items: Array<RESPValue>): Array<(String, Blob)> {
+        let result = ArrayList<(String, Blob)>()
+        var i: Int64 = 0
+        while (i + 1 < items.size) {
+            match ((asString(items[i]), asBlob(items[i + 1]))) {
+                case (Some(field), Some(value)) => result.add((field, value))
+                case _ => throw ProtocolError("HSCAN 返回字段/值格式错误")
+            }
+            i += 2
+        }
+        collectArray(result.iterator())
+    }
+
+    private func parseSortedSetEntries(items: Array<RESPValue>): Array<(Blob, Float64)> {
+        let result = ArrayList<(Blob, Float64)>()
+        var i: Int64 = 0
+        while (i + 1 < items.size) {
+            match ((asBlob(items[i]), asString(items[i + 1]))) {
+                case (Some(member), Some(score)) => result.add((member, Float64.parse(score)))
+                case _ => throw ProtocolError("ZSCAN 返回成员/分值格式错误")
+            }
+            i += 2
+        }
+        collectArray(result.iterator())
     }
 }
