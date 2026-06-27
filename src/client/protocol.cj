@@ -1,4 +1,5 @@
 package redis.client
+import std.collection.*
 
 /// 协议协商扩展
 ///
@@ -11,8 +12,22 @@ extend RedisClient {
     ///
     /// @return HELLO 命令返回的服务器信息
     /// @throws ProtocolError 协议升级失败时
-    public func hello(): RESPValue {
-        let resp = executeString(["HELLO", "3"])
+    public func hello(username!: Option<String> = None,
+                      password!: Option<String> = None): RESPValue {
+        let args = ArrayList<String>()
+        args.add("HELLO")
+        args.add("3")
+        match (password) {
+            case Some(pwd) =>
+                args.add("AUTH")
+                args.add(match (username) {
+                    case Some(user) => user
+                    case None => "default"
+                })
+                args.add(pwd)
+            case None => ()
+        }
+        let resp = executeString(collectArray(args.iterator()))
         match (resp) {
             case RESPValue.Map(pairs) =>
                 println("成功升级到 RESP3")

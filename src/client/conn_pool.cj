@@ -1,6 +1,7 @@
 package redis.client
 import std.time.*
 import std.collection.*
+import std.sync.*
 
 /// 连接池（对象池模式）
 ///
@@ -17,6 +18,7 @@ public class ConnectionPool <: Resource {
     private var idle: ArrayList<PooledConnection>
     private var activeCount: Int64
     private var closed: Bool
+    private let lock: Mutex
 
     /// 创建连接池
     ///
@@ -34,6 +36,7 @@ public class ConnectionPool <: Resource {
         this.idle = ArrayList<PooledConnection>()
         this.activeCount = 0
         this.closed = false
+        this.lock = Mutex()
     }
 
     /// 从池中获取一个连接
@@ -41,75 +44,96 @@ public class ConnectionPool <: Resource {
     /// @return 可用的 RedisConnection
     /// @throws ConnectionError 无可用连接时
     public func acquire(): RedisConnection {
-        if (closed) {
-            throw ConnectionError(
-                "连接池已关闭",
-                host,
-                port
-            )
-        }
-
-        // 清理过期空闲连接
-        evictIdle()
-
-        // 尝试从空闲队列获取
-        while (idle.size > 0) {
-            let pc = idle.remove(at: idle.size - 1)
-            if (!pc.conn.isClosed()) {
-                activeCount++
-                return pc.conn
+        synchronized (lock) {
+            if (closed) {
+                throw ConnectionError(
+                    "连接池已关闭",
+                    host,
+                    port
+                )
             }
-            // 连接已关闭，丢弃
-        }
 
-        // 检查是否达到最大连接数
-        if (activeCount >= maxSize) {
-            throw ConnectionError(
-                "连接池已满 (${maxSize}/${maxSize})",
-                host,
-                port
-            )
-        }
+            // 清理过期空闲连接
+            evictIdle()
 
-        // 创建新连接
-        let transport = TcpTransport(host, port)
-        let conn = RedisConnection(transport, autoHello: true)
-        conn.connect()
-        activeCount++
-        conn
+            // 尝试从空闲队列获取
+            while (idle.size > 0) {
+                let pc = idle.remove(at: idle.size - 1)
+                if (!pc.conn.isClosed()) {
+                    activeCount++
+                    return pc.conn
+                }
+                // 连接已关闭，丢弃
+            }
+
+            // 检查是否达到最大连接数
+            if (activeCount >= maxSize) {
+                throw ConnectionError(
+                    "连接池已满 (${maxSize}/${maxSize})",
+                    host,
+                    port
+                )
+            }
+
+            // 创建新连接
+            let transport = TcpTransport(host, port)
+            let conn = RedisConnection(transport, autoHello: true)
+            conn.connect()
+            activeCount++
+            conn
+        }
     }
 
     /// 归还连接到池中
     ///
     /// @param conn 要归还的连接
     public func release(conn: RedisConnection): Unit {
-        if (closed) { return }
-        if (conn.isClosed()) {
-            activeCount--
-            return
+        synchronized (lock) {
+            if (closed) {
+                conn.close()
+                if (activeCount > 0) { activeCount-- }
+                return
+            }
+            if (conn.isClosed()) {
+                if (activeCount > 0) { activeCount-- }
+                return
+            }
+            idle.add(PooledConnection(conn, MonoTime.now()))
+            if (activeCount > 0) { activeCount-- }
         }
-        idle.add(PooledConnection(conn, MonoTime.now()))
-        activeCount--
     }
 
     /// 关闭连接池中的所有连接
     public func close(): Unit {
-        closed = true
-        for (pc in idle) {
-            pc.conn.close()
+        synchronized (lock) {
+            closed = true
+            for (pc in idle) {
+                pc.conn.close()
+            }
+            idle.clear()
         }
-        idle.clear()
-        activeCount = 0
     }
 
     /// 检查是否已关闭
-    public func isClosed(): Bool { closed }
+    public func isClosed(): Bool {
+        synchronized (lock) {
+            closed
+        }
+    }
 
     /// 获取活跃连接数
-    public func getActiveCount(): Int64 { activeCount }
+    public func getActiveCount(): Int64 {
+        synchronized (lock) {
+            activeCount
+        }
+    }
 
     /// 获取空闲连接数
-    public func getIdleCount(): Int64 { idle.size }
+    public func getIdleCount(): Int64 {
+        synchronized (lock) {
+            idle.size
+        }
+    }
 
     // ====================================================================
     // 内部管理

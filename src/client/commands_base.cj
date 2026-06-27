@@ -43,6 +43,7 @@ public abstract class Command<T> {
 /// 期望一个 SimpleString 响应，返回字符串内容
 public func expectSimpleString(resp: RESPValue, cmd: String): String {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectSimpleString(value, cmd)
         case RESPValue.SimpleString(s) => s
         case RESPValue.Error(e) => throw createCommandError(e)
         case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
@@ -53,6 +54,7 @@ public func expectSimpleString(resp: RESPValue, cmd: String): String {
 /// 期望 OK 响应
 public func expectOK(resp: RESPValue, cmd: String): Unit {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectOK(value, cmd)
         case RESPValue.SimpleString("OK") => ()
         case RESPValue.Error(e) => throw createCommandError(e)
         case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
@@ -63,6 +65,7 @@ public func expectOK(resp: RESPValue, cmd: String): Unit {
 /// 期望 Integer 响应
 public func expectInt(resp: RESPValue, cmd: String): Int64 {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectInt(value, cmd)
         case RESPValue.Integer(n) => n
         case RESPValue.Error(e) => throw createCommandError(e)
         case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
@@ -73,7 +76,9 @@ public func expectInt(resp: RESPValue, cmd: String): Int64 {
 /// 期望 Option<Blob> 响应（BulkString 或 RESP3 Null）
 public func expectBlob(resp: RESPValue, cmd: String): Option<Blob> {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectBlob(value, cmd)
         case RESPValue.BulkString(v) => v
+        case RESPValue.StreamedString(blob) => Some(blob)
         case RESPValue.Null => None
         case RESPValue.Error(e) => throw createCommandError(e)
         case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
@@ -84,7 +89,9 @@ public func expectBlob(resp: RESPValue, cmd: String): Option<Blob> {
 /// 期望非 null 的 Blob 响应（或 RESP3 Null 时抛异常）
 public func expectBlobVal(resp: RESPValue, cmd: String): Blob {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectBlobVal(value, cmd)
         case RESPValue.BulkString(Some(blob)) => blob
+        case RESPValue.StreamedString(blob) => blob
         case RESPValue.BulkString(None) =>
             throw ProtocolError("${cmd}: 收到意外的 nil BulkString")
         case RESPValue.Null =>
@@ -98,6 +105,7 @@ public func expectBlobVal(resp: RESPValue, cmd: String): Blob {
 /// 期望 Array<RESPValue> 响应
 public func expectArray(resp: RESPValue, cmd: String): Option<Array<RESPValue>> {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectArray(value, cmd)
         case RESPValue.Array(v) => v
         case RESPValue.Null => None
         case RESPValue.Error(e) => throw createCommandError(e)
@@ -109,6 +117,7 @@ public func expectArray(resp: RESPValue, cmd: String): Option<Array<RESPValue>> 
 /// 期望字符串数组响应
 public func expectStringArray(resp: RESPValue, cmd: String): Array<String> {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectStringArray(value, cmd)
         case RESPValue.Array(Some(items)) => extractStringArray(items)
         case RESPValue.Array(None) => []
         case RESPValue.Set(items) => extractStringArray(items)
@@ -121,6 +130,7 @@ public func expectStringArray(resp: RESPValue, cmd: String): Array<String> {
 /// 期望 Map 或 Array（RESP2 兼容）响应
 public func expectMapOrArray(resp: RESPValue, cmd: String): RESPValue {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectMapOrArray(value, cmd)
         case RESPValue.Map(_) | RESPValue.Array(_) => resp
         case RESPValue.Error(e) => throw createCommandError(e)
         case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
@@ -131,6 +141,7 @@ public func expectMapOrArray(resp: RESPValue, cmd: String): RESPValue {
 /// 期望 Boolean 响应（Redis 3+ 返回 #t/#f，旧版返回 :1/:0）
 public func expectBool(resp: RESPValue, cmd: String): Bool {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectBool(value, cmd)
         case RESPValue.Boolean(b) => b
         case RESPValue.Integer(1) => true
         case RESPValue.Integer(0) => false
@@ -143,6 +154,7 @@ public func expectBool(resp: RESPValue, cmd: String): Bool {
 /// 期望 Double 响应
 public func expectDouble(resp: RESPValue, cmd: String): Float64 {
     match (resp) {
+        case RESPValue.Attributed(value, _) => expectDouble(value, cmd)
         case RESPValue.Double(f) => f
         case RESPValue.BulkString(Some(blob)) =>
             try {
@@ -176,6 +188,11 @@ public func extractStringArray(items: Array<RESPValue>): Array<String> {
     let result = ArrayList<String>()
     for (item in items) {
         match (item) {
+            case RESPValue.Attributed(value, _) =>
+                match (asString(value)) {
+                    case Some(s) => result.add(s)
+                    case None => ()
+                }
             case RESPValue.BulkString(Some(blob)) =>
                 result.add(blob.toUtf8())
             case RESPValue.BulkString(None) => ()
@@ -191,6 +208,11 @@ public func extractBlobArray(items: Array<RESPValue>): Array<Blob> {
     let result = ArrayList<Blob>()
     for (item in items) {
         match (item) {
+            case RESPValue.Attributed(value, _) =>
+                match (asBlob(value)) {
+                    case Some(blob) => result.add(blob)
+                    case None => ()
+                }
             case RESPValue.BulkString(Some(blob)) => result.add(blob)
             case RESPValue.BulkString(None) => ()
             case RESPValue.SimpleString(s) => result.add(Blob.fromUtf8(s))

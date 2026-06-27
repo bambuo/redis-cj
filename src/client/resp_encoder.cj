@@ -84,14 +84,11 @@ public class RespEncoder {
                 append(buf, ",${str}\r\n")
 
             case RESPValue.BigNumber(s) =>
+                validateBigNumberText(s)
                 append(buf, "(${s}\r\n")
 
             case RESPValue.VerbatimString(enc, blob) =>
-                if (enc.size != 3) {
-                    throw ProtocolError(
-                        "VerbatimString 编码标识必须恰好为 3 字节，实际为 ${enc.size}"
-                    )
-                }
+                validateVerbatimEncoding(enc)
                 let totalLen = 4 + blob.size  // 3 (enc) + 1 (:) + data
                 append(buf, "=${totalLen}\r\n")
                 append(buf, enc)
@@ -130,6 +127,10 @@ public class RespEncoder {
                     appendBytes(buf, encodeValue(k))
                     appendBytes(buf, encodeValue(v))
                 }
+
+            case RESPValue.Attributed(value, pairs) =>
+                appendBytes(buf, encodeValue(RESPValue.Attribute(pairs)))
+                appendBytes(buf, encodeValue(value))
 
             case RESPValue.StreamedString(blob) =>
                 // 流式字符串编码：$? + 分块
@@ -175,9 +176,7 @@ public class RespEncoder {
                 append(buf, ".\r\n")
 
             case RESPValue.End =>
-                buf.add(0x2Eu8)  // '.'
-                buf.add(0x0Du8)  // '\r'
-                buf.add(0x0Au8)  // '\n'
+                throw ProtocolError("End 标记只能作为流式聚合终止符")
         }
 
         collectArray(buf.iterator())
@@ -209,6 +208,44 @@ public class RespEncoder {
     private static func validateNoCRLF(s: String, typeName: String): Unit {
         if (s.contains("\r") || s.contains("\n")) {
             throw ProtocolError("${typeName} 不得包含 CR 或 LF 字符")
+        }
+    }
+
+    /// 校验 BigNumber 只能包含可选符号和十进制数字
+    private static func validateBigNumberText(s: String): Unit {
+        if (s.size == 0) {
+            throw ProtocolError("BigNumber 不能为空")
+        }
+        if (s.contains("\r") || s.contains("\n")) {
+            throw ProtocolError("BigNumber 不得包含 CR 或 LF 字符")
+        }
+        var start: Int64 = 0
+        if (s.startsWith("-") || s.startsWith("+")) {
+            if (s.size == 1) {
+                throw ProtocolError("BigNumber 符号后必须包含数字")
+            }
+            start = 1
+        }
+        let bytes = s.toArray()
+        for (i in start..bytes.size) {
+            if (bytes[i] < 0x30u8 || bytes[i] > 0x39u8) {
+                throw ProtocolError("BigNumber 只能包含十进制数字")
+            }
+        }
+    }
+
+    /// 校验 VerbatimString 编码标识为 3 个非控制 ASCII 字节
+    private static func validateVerbatimEncoding(enc: String): Unit {
+        let bytes = enc.toArray()
+        if (bytes.size != 3) {
+            throw ProtocolError(
+                "VerbatimString 编码标识必须恰好为 3 字节，实际为 ${bytes.size}"
+            )
+        }
+        for (b in bytes) {
+            if (b < 0x20u8 || b > 0x7Eu8) {
+                throw ProtocolError("VerbatimString 编码标识必须为 3 个非控制 ASCII 字节")
+            }
         }
     }
 

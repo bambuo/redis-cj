@@ -1,6 +1,7 @@
 package redis.client
 import std.collection.*
 import std.convert.*
+import std.unicode.*
 
 /// Redis 集群客户端
 ///
@@ -153,10 +154,10 @@ public class ClusterClient <: Resource {
 
     /// 根据命令参数选择目标节点
     private func selectNode(args: Array<Blob>): String {
-        // 提取键名（大多数命令的第一个参数是键）
-        if (args.size >= 2) {
-            let keyBytes = args[1].toUtf8()
-            match (slotMap.getNode(keyBytes)) {
+        let keys = extractRoutingKeys(args)
+        if (keys.size > 0) {
+            ensureSameSlot(keys)
+            match (slotMap.getNode(keys[0])) {
                 case Some(node) => "${node.host}:${node.port}"
                 case None =>
                     // 槽位未映射，使用第一个连接
@@ -167,6 +168,10 @@ public class ClusterClient <: Resource {
         // 没有键参数的命令（如 PING, INFO），使用第一个节点
         for ((addr, _) in connections) { return addr }
         throw ConnectionError("无可用集群节点", "", 0u16)
+    }
+
+    private func extractRoutingKeys(args: Array<Blob>): Array<String> {
+        extractClusterRoutingKeys(args)
     }
 
     /// 确保到指定地址的连接存在
@@ -194,6 +199,201 @@ public class ClusterClient <: Resource {
                 (addr[0..idx], addr[idx + 1..])
             case None =>
                 (addr, "6379")
+        }
+    }
+}
+
+internal func extractClusterRoutingKeys(args: Array<Blob>): Array<String> {
+    if (args.size < 2) { return [] }
+    let cmd = args[0].toUtf8().toLower()
+    match (cmd) {
+        case "eval" | "evalsha" | "eval_ro" | "evalsha_ro" =>
+            extractCountedKeys(args, 2, 3)
+        case "fcall" | "fcall_ro" =>
+            extractCountedKeys(args, 2, 3)
+        case "xread" =>
+            extractStreamReadKeys(args, 1)
+        case "xreadgroup" =>
+            extractStreamReadKeys(args, 1)
+        case "mset" | "msetnx" =>
+            extractAlternatingKeys(args, 1)
+        case "bitop" =>
+            extractRangeKeys(args, 2, args.size)
+        case "object" =>
+            extractObjectKeys(args)
+        case "memory" =>
+            extractMemoryKeys(args)
+        case "sort" =>
+            extractSortKeys(args)
+        case "sort_ro" =>
+            extractRangeKeys(args, 1, 2)
+        case "migrate" =>
+            extractMigrateKeys(args)
+        case "script" | "function" =>
+            []
+        case "del" | "unlink" | "exists" | "touch" | "mget"
+           | "watch" | "sdiff" | "sinter" | "sunion"
+           | "sdiffstore" | "sinterstore" | "sunionstore"
+           | "pfcount" | "pfmerge" =>
+            extractRangeKeys(args, 1, args.size)
+        case "rename" | "renamenx" | "copy" | "rpoplpush"
+           | "brpoplpush" | "smove" | "lcs" =>
+            extractRangeKeys(args, 1, 3)
+        case "lmove" | "blmove" =>
+            extractRangeKeys(args, 1, 3)
+        case "zrangestore" | "geosearchstore" =>
+            extractRangeKeys(args, 1, 3)
+        case "blpop" | "brpop" | "bzpopmin" | "bzpopmax" =>
+            extractRangeKeys(args, 1, args.size - 1)
+        case "zunion" | "zinter" | "zdiff" | "zunionstore"
+           | "zinterstore" | "zdiffstore" | "zintercard"
+           | "sintercard" | "lmpop" | "blmpop" | "zmpop" | "bzmpop" =>
+            extractKeyNumCommandKeys(args, cmd)
+        case "ping" | "info" | "dbsize" | "time" | "role"
+           | "command" | "client" | "cluster" | "pubsub"
+           | "config" | "slowlog" | "latency"
+           | "module" | "acl" | "flushdb" | "flushall"
+           | "save" | "bgsave" | "bgrewriteaof" | "shutdown"
+           | "readonly" | "readwrite" | "asking" =>
+            []
+        case _ =>
+            [args[1].toUtf8()]
+    }
+}
+
+private func extractCountedKeys(args: Array<Blob>, countIndex: Int64, firstKeyIndex: Int64): Array<String> {
+    if (args.size <= countIndex) { return [] }
+    let keyCount = try { Int64.parse(args[countIndex].toUtf8()) } catch (_) { 0 }
+    let keys = ArrayList<String>()
+    var i: Int64 = 0
+    while (i < keyCount && firstKeyIndex + i < args.size) {
+        keys.add(args[firstKeyIndex + i].toUtf8())
+        i++
+    }
+    collectArray(keys.iterator())
+}
+
+private func extractAlternatingKeys(args: Array<Blob>, firstKeyIndex: Int64): Array<String> {
+    let keys = ArrayList<String>()
+    var i = firstKeyIndex
+    while (i < args.size) {
+        keys.add(args[i].toUtf8())
+        i += 2
+    }
+    collectArray(keys.iterator())
+}
+
+private func extractRangeKeys(args: Array<Blob>, start: Int64, end: Int64): Array<String> {
+    let keys = ArrayList<String>()
+    var i = start
+    let limit = if (end < args.size) { end } else { args.size }
+    while (i < limit) {
+        keys.add(args[i].toUtf8())
+        i++
+    }
+    collectArray(keys.iterator())
+}
+
+private func extractObjectKeys(args: Array<Blob>): Array<String> {
+    if (args.size < 3) { return [] }
+    let subcmd = args[1].toUtf8().toLower()
+    match (subcmd) {
+        case "encoding" | "freq" | "idletime" | "refcount" => [args[2].toUtf8()]
+        case _ => []
+    }
+}
+
+private func extractMemoryKeys(args: Array<Blob>): Array<String> {
+    if (args.size < 3) { return [] }
+    let subcmd = args[1].toUtf8().toLower()
+    match (subcmd) {
+        case "usage" => [args[2].toUtf8()]
+        case _ => []
+    }
+}
+
+private func extractSortKeys(args: Array<Blob>): Array<String> {
+    if (args.size < 2) { return [] }
+    let keys = ArrayList<String>()
+    keys.add(args[1].toUtf8())
+
+    var i: Int64 = 2
+    while (i + 1 < args.size) {
+        if (args[i].toUtf8().toLower() == "store") {
+            keys.add(args[i + 1].toUtf8())
+            break
+        }
+        i++
+    }
+    collectArray(keys.iterator())
+}
+
+private func extractMigrateKeys(args: Array<Blob>): Array<String> {
+    if (args.size < 4) { return [] }
+    var i: Int64 = 6
+    while (i < args.size) {
+        if (args[i].toUtf8().toLower() == "keys") {
+            return extractRangeKeys(args, i + 1, args.size)
+        }
+        i++
+    }
+
+    let key = args[3].toUtf8()
+    if (key == "") { return [] }
+    [key]
+}
+
+private func extractKeyNumCommandKeys(args: Array<Blob>, cmd: String): Array<String> {
+    let countIndex = match (cmd) {
+        case "zunionstore" | "zinterstore" | "zdiffstore" => 2
+        case "lmpop" | "zmpop" => 1
+        case "blmpop" | "bzmpop" => 2
+        case _ => 1
+    }
+    let firstKeyIndex = countIndex + 1
+    if (args.size <= countIndex) { return [] }
+    let keyCount = try { Int64.parse(args[countIndex].toUtf8()) } catch (_) { 0 }
+    let keys = ArrayList<String>()
+    if (cmd == "zunionstore" || cmd == "zinterstore" || cmd == "zdiffstore") {
+        keys.add(args[1].toUtf8())
+    }
+    var i: Int64 = 0
+    while (i < keyCount && firstKeyIndex + i < args.size) {
+        keys.add(args[firstKeyIndex + i].toUtf8())
+        i++
+    }
+    collectArray(keys.iterator())
+}
+
+private func extractStreamReadKeys(args: Array<Blob>, startIndex: Int64): Array<String> {
+    var streamsIndex: Int64 = -1
+    var i = startIndex
+    while (i < args.size) {
+        if (args[i].toUtf8().toLower() == "streams") {
+            streamsIndex = i
+            break
+        }
+        i++
+    }
+    if (streamsIndex < 0 || streamsIndex + 1 >= args.size) { return [] }
+
+    let remaining = args.size - streamsIndex - 1
+    let keyCount = remaining / 2
+    let keys = ArrayList<String>()
+    var j: Int64 = 0
+    while (j < keyCount) {
+        keys.add(args[streamsIndex + 1 + j].toUtf8())
+        j++
+    }
+    collectArray(keys.iterator())
+}
+
+private func ensureSameSlot(keys: Array<String>): Unit {
+    if (keys.size <= 1) { return }
+    let slot = SlotMap.getSlot(keys[0])
+    for (key in keys) {
+        if (SlotMap.getSlot(key) != slot) {
+            throw ProtocolError("CROSSSLOT Keys in request don't hash to the same slot")
         }
     }
 }

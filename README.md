@@ -4,9 +4,18 @@
 [![Cangjie](https://img.shields.io/badge/language-Cangjie%201.1.3-orange)](cangjie-lang.cn)
 [![Redis](https://img.shields.io/badge/Redis-RESP2%2FRESP3-red)](redis.io)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen)
-![Tests](https://img.shields.io/badge/tests-187%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-251%20passing-brightgreen)
 
 基于**仓颉编程语言**实现的完整 Redis 协议客户端，支持 **RESP2 + RESP3** 全协议、Pipeline、事务、Pub/Sub、集群、**TLS 加密传输**等所有核心功能。
+
+## 当前状态
+
+纯客户端侧核心能力已完成并通过构建与测试验证：
+
+- `cjpm build --verbose` 通过
+- `cjpm test` 通过，251 个测试用例全部成功
+- RESP2/RESP3 编解码、连接管理、连接池、Pipeline、事务、Pub/Sub、SCAN、Cluster 路由与重定向等客户端职责已覆盖
+- 非客户端 P0 范围：Redis Stack/模块命令 typed wrapper、偏服务端运维管理命令全量封装、真实 Redis Cluster 环境集成测试
 
 ---
 
@@ -105,11 +114,11 @@
 | | SCAN 迭代器 | SCAN / HSCAN / SSCAN / ZSCAN，支持 MATCH / COUNT | ✅ |
 | | 集群客户端 | MOVED 自动重定向 / ASK 重定向 / CRC16 槽位计算 / HashTag | ✅ |
 | | 错误工厂 | 按错误前缀分发至 WrongTypeError / AuthError / MovedError 等子类 | ✅ |
-| **模块扩展** | RedisJSON | JSON.SET / JSON.GET / JSON.ARRAPPEND 等 | |
-| | RediSearch | FT.SEARCH / FT.CREATE / FT.AGGREGATE 等 | |
-| | RedisTimeSeries | TS.CREATE / TS.ADD / TS.RANGE 等 | |
-| | RedisGraph | GRAPH.QUERY / GRAPH.EXPLAIN 等 | |
-| | RedisBloom | BF.ADD / BF.EXISTS / CMS.INITBYDIM 等 | |
+| **模块扩展** | RedisJSON | JSON.SET / JSON.GET / JSON.ARRAPPEND 等 | 非客户端 P0 |
+| | RediSearch | FT.SEARCH / FT.CREATE / FT.AGGREGATE 等 | 非客户端 P0 |
+| | RedisTimeSeries | TS.CREATE / TS.ADD / TS.RANGE 等 | 非客户端 P0 |
+| | RedisGraph | GRAPH.QUERY / GRAPH.EXPLAIN 等 | 非客户端 P0 |
+| | RedisBloom | BF.ADD / BF.EXISTS / CMS.INITBYDIM 等 | 非客户端 P0 |
 
 ---
 
@@ -258,46 +267,47 @@ try (cluster = ClusterClient(["127.0.0.1:7000"])) {
 redis-cj/
 ├── cjpm.toml                       # 仓颉项目管理配置
 ├── README.md                       # 项目说明
-├── RESP2-SPEC.md                   # RESP2 协议规范（英文原版）
-├── RESP2-SPEC-中文版.md            # RESP2 协议规范（中文翻译）
-├── RESP3-SPEC.md                   # RESP3 协议规范（英文原版）
-├── RESP3-SPEC-中文版.md            # RESP3 协议规范（中文翻译）
+├── docs/
+│   ├── RESP2-SPEC.md               # RESP2 协议规范（英文原版）
+│   ├── RESP2-SPEC-中文版.md        # RESP2 协议规范（中文翻译）
+│   ├── RESP3-SPEC.md               # RESP3 协议规范（英文原版）
+│   └── RESP3-SPEC-中文版.md        # RESP3 协议规范（中文翻译）
 └── src/
     ├── main.cj                     # 演示入口
-    ├── utils_blob.cj               # Blob 二进制安全类型
-    ├── utils_errors.cj             # 错误类型层次
-    ├── utils_scan_iter.cj          # SCAN 游标迭代器
-    ├── resp_types.cj               # RESP 值类型枚举（17 种变体）
-    ├── resp_encoder.cj             # RESP 编码器
-    ├── resp_decoder.cj             # RESP 解码器（流式/属性/Push）
-    ├── transport_iface.cj          # Transport 接口
-    ├── transport_tcp.cj            # TCP 传输实现
-    ├── transport_tls.cj            # TLS 加密传输实现
-    ├── conn_state.cj               # 连接状态枚举
-    ├── conn_connection.cj          # Redis 连接（状态机 + HELLO）
-    ├── conn_pool.cj                # 连接池
-    ├── client_redis_client.cj      # Redis 客户端门面
-    ├── client_pipeline.cj          # Pipeline 流水线
-    ├── client_pubsub.cj            # 发布/订阅
-    ├── client_transaction.cj       # 事务
-    ├── client_protocol.cj          # 协议协商
-    ├── commands_base.cj            # Command<T> 抽象类 + 解析辅助
-    ├── commands_string.cj          # 字符串命令
-    ├── commands_list.cj            # 列表命令
-    ├── commands_hash.cj            # 哈希命令
-    ├── commands_set.cj             # 集合命令
-    ├── commands_sorted_set.cj      # 有序集合命令
-    ├── commands_stream.cj          # 流命令
-    ├── commands_geo_bitmap_hll.cj  # 地理 + 位图 + HyperLogLog
-    ├── commands_scripting.cj       # 脚本命令
-    ├── commands_server.cj          # 服务器命令
-    ├── commands_key.cj             # 键命令
-    ├── commands_connection.cj      # 连接命令
-    ├── cluster_slot_map.cj         # 集群槽位映射 + CRC16
-    ├── cluster_client.cj           # 集群客户端
-    ├── transport_tls_test.cj       # TLS 传输单元测试
-    ├── *_test.cj                   # 单元测试文件
-    └── commands_integration_test.cj# 集成测试
+    └── client/
+        ├── utils_blob.cj           # Blob 二进制安全类型
+        ├── utils_errors.cj         # 错误类型层次
+        ├── utils_scan_iter.cj      # SCAN 游标迭代器
+        ├── resp_types.cj           # RESP 值类型枚举（17 种变体）
+        ├── resp_encoder.cj         # RESP 编码器
+        ├── resp_decoder.cj         # RESP 解码器（流式/属性/Push）
+        ├── transport_iface.cj      # Transport 接口
+        ├── transport_tcp.cj        # TCP 传输实现
+        ├── transport_tls.cj        # TLS 加密传输实现
+        ├── conn_state.cj           # 连接状态枚举
+        ├── conn_connection.cj      # Redis 连接（状态机 + HELLO）
+        ├── conn_pool.cj            # 连接池
+        ├── redis_client.cj         # Redis 客户端门面
+        ├── pipeline.cj             # Pipeline 流水线
+        ├── pubsub.cj               # 发布/订阅
+        ├── transaction.cj          # 事务
+        ├── protocol.cj             # 协议协商
+        ├── commands_base.cj        # Command<T> 抽象类 + 解析辅助
+        ├── commands_string.cj      # 字符串命令
+        ├── commands_list.cj        # 列表命令
+        ├── commands_hash.cj        # 哈希命令
+        ├── commands_set.cj         # 集合命令
+        ├── commands_sorted_set.cj  # 有序集合命令
+        ├── commands_stream.cj      # 流命令
+        ├── commands_geo_bitmap_hll.cj
+        ├── commands_scripting.cj   # 脚本命令
+        ├── commands_server.cj      # 服务器命令
+        ├── commands_key.cj         # 键命令
+        ├── commands_connection.cj  # 连接命令
+        ├── cluster_slot_map.cj     # 集群槽位映射 + CRC16
+        ├── cluster_client.cj       # 集群客户端
+        ├── *_test.cj               # 单元测试文件
+        └── commands_integration_test.cj
 ```
 
 ---
@@ -331,11 +341,11 @@ main() {
 | `cjpm.toml` 包名 `name` | ✅ `redis` |
 | `cjpm.toml` 版本号 `version` | ✅ `1.0.20260626` |
 | 源文件 `package` 声明一致 | ✅ 全部 `redis.client` |
-| `LICENSE` 许可证文件 | ✅ Apache 2.0 |
+| `LICENSE` 许可证文件 | ✅ MIT |
 | `.gitignore` | ✅ 已添加 |
 | `README.md` | ✅ 中英文文档 |
-| 单元测试 | ✅ 187 通过 |
-| 命令覆盖 | ✅ 全部核心 Redis 命令 |
+| 单元测试 | ✅ 251 通过 |
+| 命令覆盖 | ✅ 纯客户端核心 Redis 能力 |
 | RESP2/RESP3 协议 | ✅ 全部 17 种 RESP 值类型 |
 
 当前仓颉语言已支持**中央仓库**分发。构建时 `cjpm` 自动从中央仓库解析版本依赖并下载。如需使用本地开发版本，可临时替换为 `path` 依赖。

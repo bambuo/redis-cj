@@ -15,6 +15,51 @@ class CommandIntegrationTests {
         "${prefix}_${counter}"
     }
 
+    // -------- 连接生命周期 --------
+
+    @TestCase
+    func testPoolClientCloseReturnsConnection() {
+        let pool = ConnectionPool("127.0.0.1", 6379u16, maxSize: 1)
+        let c = RedisClient(pool)
+        @Expect(pool.getActiveCount(), 1)
+        @Expect(pool.getIdleCount(), 0)
+
+        c.close()
+        @Expect(pool.getActiveCount(), 0)
+        @Expect(pool.getIdleCount(), 1)
+
+        let c2 = RedisClient(pool)
+        @Expect(c2.ping(), "PONG")
+        @Expect(pool.getActiveCount(), 1)
+        @Expect(pool.getIdleCount(), 0)
+        c2.close()
+        pool.close()
+    }
+
+    @TestCase
+    func testBorrowedClientCloseAfterPoolCloseReleasesActive() {
+        let pool = ConnectionPool("127.0.0.1", 6379u16, maxSize: 1)
+        let c = RedisClient(pool)
+        @Expect(pool.getActiveCount(), 1)
+
+        pool.close()
+        @Expect(pool.isClosed(), true)
+        @Expect(pool.getActiveCount(), 1)
+
+        c.close()
+        @Expect(pool.getActiveCount(), 0)
+        @Expect(pool.getIdleCount(), 0)
+    }
+
+    @TestCase
+    func testClosedClientCommandThrowsConnectionError() {
+        let c = createClient()
+        @Expect(c.ping(), "PONG")
+        c.close()
+        @Expect(c.isClosed(), true)
+        @ExpectThrows[ConnectionError](c.ping())
+    }
+
     // -------- 字符串命令 --------
 
     @TestCase
@@ -597,12 +642,57 @@ class CommandIntegrationTests {
         let redir = c.clientGetRedir()
         @Expect(redir >= -1, true)
         @Expect(c.clientInfo().size > 0, true)
+        c.clientTracking(true, prefixes: [uniqueKey("track")], bcast: true, noloop: true)
+        c.clientTracking(false)
         let info = c.clientTrackingInfo()
         match (info) {
             case RESPValue.Array(_) | RESPValue.Map(_) => ()
             case _ => @Fail("CLIENT TRACKINGINFO 返回类型异常")
         }
         @Expect(c.aclWhoami().size > 0, true)
+    }
+
+    @TestCase
+    func testPubSubSubscribePublish() {
+        let sub = createClient()
+        let pub = createClient()
+        let channel = uniqueKey("pubsub")
+        let captured = PubSubCapture()
+
+        sub.subscribe([channel], { ch, msg =>
+            captured.channel = ch.toUtf8()
+            captured.message = msg.toUtf8()
+        })
+        @Expect(pub.publish(channel, Blob.fromUtf8("hello")) >= 1, true)
+        sub.readPubSubMessage()
+
+        @Expect(captured.channel, channel)
+        @Expect(captured.message, "hello")
+        sub.unsubscribe([channel])
+        sub.close()
+        pub.close()
+    }
+
+    @TestCase
+    func testPubSubPatternPublish() {
+        let sub = createClient()
+        let pub = createClient()
+        let prefix = uniqueKey("psub")
+        let channel = "${prefix}:one"
+        let captured = PubSubCapture()
+
+        sub.psubscribe(["${prefix}:*"], { ch, msg =>
+            captured.channel = ch.toUtf8()
+            captured.message = msg.toUtf8()
+        })
+        @Expect(pub.publish(channel, Blob.fromUtf8("pattern")) >= 1, true)
+        sub.readPubSubMessage()
+
+        @Expect(captured.channel, channel)
+        @Expect(captured.message, "pattern")
+        sub.punsubscribe(["${prefix}:*"])
+        sub.close()
+        pub.close()
     }
 
     @TestCase

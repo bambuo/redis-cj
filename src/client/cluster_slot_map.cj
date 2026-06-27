@@ -88,12 +88,15 @@ public class SlotMap {
 
     /// 提取 hash tag `{...}` 中的内容
     private static func extractHashTag(key: String): String {
-        let startIdx = key.indexOf("{")
-        let endIdx = key.indexOf("}")
-        match ((startIdx, endIdx)) {
-            case (Some(s), Some(e)) =>
-                if (s < e) { key[s + 1..e] } else { key }
-            case _ => key
+        match (key.indexOf("{")) {
+            case Some(s) =>
+                let rest = key[s + 1..]
+                match (rest.indexOf("}")) {
+                    case Some(e) =>
+                        if (e == 0) { key } else { rest[0..e] }
+                    case None => key
+                }
+            case None => key
         }
     }
 

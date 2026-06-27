@@ -134,4 +134,14 @@ class ErrorTests {
         let v = expectDouble(RESPValue.BulkString(Some(Blob.fromUtf8("3.25"))), "FLOAT")
         @Expect(v > 3.24 && v < 3.26, true)
     }
+
+    @TestCase
+    func expectBlobAcceptsStreamedString() {
+        let blob = expectBlobVal(RESPValue.StreamedString(Blob.fromUtf8("value")), "GET")
+        @Expect(blob.toUtf8(), "value")
+        match (asBlob(RESPValue.StreamedString(Blob.fromUtf8("other")))) {
+            case Some(v) => @Expect(v.toUtf8(), "other")
+            case None => @Fail("StreamedString 应可作为 Blob 提取")
+        }
+    }
 }

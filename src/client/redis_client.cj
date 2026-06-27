@@ -17,6 +17,8 @@ import stdx.net.tls.*
 /// ```
 public class RedisClient <: Resource {
     internal let connection: RedisConnection
+    private let borrowedPool: Option<ConnectionPool>
+    private var closed: Bool
 
     // ====================================================================
     // 构造
@@ -28,26 +30,38 @@ public class RedisClient <: Resource {
     /// @param port 服务器端口
     /// @param autoHello 是否自动 HELLO 协商
     /// @param connectTimeout 连接超时
+    /// @param authUsername HELLO AUTH 用户名，省略时使用 default
+    /// @param authPassword HELLO AUTH 密码
     public init(host: String, port: UInt16,
                 autoHello!: Bool = true,
-                connectTimeout!: Option<Duration> = None) {
+                connectTimeout!: Option<Duration> = None,
+                authUsername!: Option<String> = None,
+                authPassword!: Option<String> = None) {
         let transport = TcpTransport(host, port)
         this.connection = RedisConnection(
             transport,
             autoHello: autoHello,
-            connectTimeout: connectTimeout
+            connectTimeout: connectTimeout,
+            authUsername: authUsername,
+            authPassword: authPassword
         )
+        this.borrowedPool = None
+        this.closed = false
         this.connection.connect()
     }
 
     /// 使用已有的连接池创建客户端
     public init(pool: ConnectionPool) {
         this.connection = pool.acquire()
+        this.borrowedPool = Some(pool)
+        this.closed = false
     }
 
     /// 使用已有的连接创建客户端
     public init(connection: RedisConnection) {
         this.connection = connection
+        this.borrowedPool = None
+        this.closed = false
     }
 
     /// 创建到 Redis 服务器的 TLS 加密连接（静态工厂）
@@ -57,17 +71,23 @@ public class RedisClient <: Resource {
     /// @param tlsConfig TLS 客户端配置（默认使用系统 CA 验证）
     /// @param autoHello 是否自动 HELLO 协商
     /// @param connectTimeout 连接超时
+    /// @param authUsername HELLO AUTH 用户名，省略时使用 default
+    /// @param authPassword HELLO AUTH 密码
     /// @return 已连接的 RedisClient 实例
     /// @throws ConnectionError TLS 握手或连接失败时
     public static func withTls(host: String, port: UInt16,
                                tlsConfig!: TlsClientConfig = TlsClientConfig(),
                                autoHello!: Bool = true,
-                               connectTimeout!: Option<Duration> = None): RedisClient {
+                               connectTimeout!: Option<Duration> = None,
+                               authUsername!: Option<String> = None,
+                               authPassword!: Option<String> = None): RedisClient {
         let transport = TlsTransport(host, port, tlsConfig: tlsConfig)
         let conn = RedisConnection(
             transport,
             autoHello: autoHello,
-            connectTimeout: connectTimeout
+            connectTimeout: connectTimeout,
+            authUsername: authUsername,
+            authPassword: authPassword
         )
         conn.connect()
         RedisClient(conn)
@@ -79,14 +99,21 @@ public class RedisClient <: Resource {
 
     /// 关闭客户端连接
     public func close(): Unit {
-        if (!connection.isClosed()) {
-            connection.close()
+        if (closed) { return }
+        closed = true
+        match (borrowedPool) {
+            case Some(pool) =>
+                pool.release(connection)
+            case None =>
+                if (!connection.isClosed()) {
+                    connection.close()
+                }
         }
     }
 
     /// 检查是否已关闭
     public func isClosed(): Bool {
-        connection.isClosed()
+        closed || connection.isClosed()
     }
 
     // ====================================================================
@@ -98,6 +125,7 @@ public class RedisClient <: Resource {
     /// @param args 命令参数（Blob 数组）
     /// @return 解码后的 RESP 值
     public func execute(args: Array<Blob>): RESPValue {
+        ensureOpen()
         connection.execute(args)
     }
 
@@ -120,6 +148,7 @@ public class RedisClient <: Resource {
     /// @param commands 多条命令
     /// @return 响应值数组
     public func executeBatch(commands: Array<Array<Blob>>): Array<RESPValue> {
+        ensureOpen()
         connection.executeBatch(commands)
     }
 
@@ -129,16 +158,19 @@ public class RedisClient <: Resource {
 
     /// 重新连接
     public func reconnect(): Unit {
+        ensureOpen()
         connection.reconnect()
     }
 
     /// 获取连接状态描述
     public func getState(): ConnectionState {
+        ensureOpen()
         connection.getState()
     }
 
     /// 获取协议版本
     public func getProtocolVersion(): Int64 {
+        ensureOpen()
         connection.getProtocolVersion()
     }
 
@@ -148,6 +180,13 @@ public class RedisClient <: Resource {
     /// 调用此方法可在执行命令后获取这些附加属性。
     /// 属性会在下一次命令执行前被覆盖。
     public func getAttributes(): Option<Array<(RESPValue, RESPValue)>> {
+        ensureOpen()
         connection.getAttributes()
+    }
+
+    private func ensureOpen(): Unit {
+        if (closed) {
+            throw ConnectionError("客户端已关闭", "", 0u16)
+        }
     }
 }

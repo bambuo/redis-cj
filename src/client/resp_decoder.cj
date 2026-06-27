@@ -81,6 +81,8 @@ public class RespDecoder {
                 throw ProtocolError(
                     "无效的 RESP 行终止：期望 \\r\\n，但 \\r 后接 0x${Int64(next)}"
                 )
+            } else if (b == 0x0Au8) {
+                throw ProtocolError("无效的 RESP 行终止：裸 \\n 不允许出现在行内")
             } else {
                 result.add(b)
             }
@@ -133,7 +135,7 @@ public class RespDecoder {
     /// 普通命令应继续使用 readValue()，让 out-of-band Push 触发回调后被跳过。
     /// Pub/Sub、MONITOR 等 push-mode 命令需要读取订阅确认帧，因此使用此入口。
     public func readValueIncludingPush(): RESPValue {
-        readValue(0, includePush: true)
+        readValue(0, includePush: true, allowEnd: false)
     }
 
     /// 读取下一个完整 RESP 值（带深度跟踪）
@@ -146,10 +148,10 @@ public class RespDecoder {
     /// @param depth 当前递归深度（内部使用）
     /// @return 第一个非 Push、非 Attribute 的 RESP 值
     public func readValue(depth: Int64): RESPValue {
-        readValue(depth, includePush: false)
+        readValue(depth, includePush: false, allowEnd: false)
     }
 
-    private func readValue(depth: Int64, includePush!: Bool): RESPValue {
+    private func readValue(depth: Int64, includePush!: Bool, allowEnd!: Bool): RESPValue {
         if (depth > maxDepth) {
             throw ProtocolError("RESP 嵌套超过最大深度 ${maxDepth}")
         }
@@ -183,9 +185,11 @@ public class RespDecoder {
                     lenBytes.add(ch)
                     collectRestOfLine(lenBytes)
                     let lineStr = String.fromUtf8(collectArray(lenBytes.iterator()))
-                    let len = Int64.parse(lineStr)
-                    if (len < 0) {
+                    let len = parseIntText(lineStr)
+                    if (len == -1) {
                         RESPValue.BulkString(None)
+                    } else if (len < -1) {
+                        throw ProtocolError("Bulk String 长度 ${len} 无效")
                     } else {
                         if (len > maxBulkLen) {
                             throw ProtocolError(
@@ -208,9 +212,11 @@ public class RespDecoder {
                     countBytes.add(ch)
                     collectRestOfLine(countBytes)
                     let lineStr = String.fromUtf8(collectArray(countBytes.iterator()))
-                    let count = Int64.parse(lineStr)
-                    if (count < 0) {
+                    let count = parseIntText(lineStr)
+                    if (count == -1) {
                         RESPValue.Array(None)
+                    } else if (count < -1) {
+                        throw ProtocolError("Array 元素数量 ${count} 无效")
                     } else {
                         let items = ArrayList<RESPValue>()
                         for (_ in 0..count) {
@@ -244,7 +250,9 @@ public class RespDecoder {
 
             case b'(' =>  // Big Number
                 let line = readLine()
-                RESPValue.BigNumber(String.fromUtf8(line))
+                let str = String.fromUtf8(line)
+                validateBigNumber(str)
+                RESPValue.BigNumber(str)
 
             case b'=' =>  // Verbatim String
                 let len = parseLineInt()
@@ -259,8 +267,12 @@ public class RespDecoder {
                 let allData = readExact(len)
                 skipCRLF()
                 // 格式: <3-byte-encoding>:<data>
+                if (allData[3] != 0x3Au8) {
+                    throw ProtocolError("Verbatim String 编码标识后必须为 ':' 分隔符")
+                }
                 let encBytes = Array<Byte>(3, repeat: 0)
                 for (i in 0..3) { encBytes[i] = allData[i] }
+                validateVerbatimEncodingBytes(encBytes)
                 let encoding = String.fromUtf8(encBytes)
                 let textLen = len - 4
                 let textBytes = Array<Byte>(textLen, repeat: 0)
@@ -269,6 +281,9 @@ public class RespDecoder {
 
             case b'!' =>  // Bulk Error
                 let len = parseLineInt()
+                if (len < 0) {
+                    throw ProtocolError("Bulk Error 长度 ${len} 无效")
+                }
                 if (len > maxBulkLen) {
                     throw ProtocolError(
                         "Bulk Error 长度 ${len} 超过最大限制 ${maxBulkLen}"
@@ -287,7 +302,10 @@ public class RespDecoder {
                     let countBytes = ArrayList<Byte>()
                     countBytes.add(ch)
                     collectRestOfLine(countBytes)
-                    let count = Int64.parse(String.fromUtf8(collectArray(countBytes.iterator())))
+                    let count = parseCount(
+                        String.fromUtf8(collectArray(countBytes.iterator())),
+                        "Map"
+                    )
                     let pairs = ArrayList<(RESPValue, RESPValue)>()
                     for (_ in 0..count) {
                         let k = readValue(depth + 1)
@@ -308,7 +326,10 @@ public class RespDecoder {
                     let countBytes = ArrayList<Byte>()
                     countBytes.add(ch)
                     collectRestOfLine(countBytes)
-                    let count = Int64.parse(String.fromUtf8(collectArray(countBytes.iterator())))
+                    let count = parseCount(
+                        String.fromUtf8(collectArray(countBytes.iterator())),
+                        "Set"
+                    )
                     let items = ArrayList<RESPValue>()
                     for (_ in 0..count) {
                         items.add(readValue(depth + 1))
@@ -317,16 +338,23 @@ public class RespDecoder {
                 }
 
             case b'>' =>  // Push
+                if (depth > 0) {
+                    throw ProtocolError("Push 类型只能出现在顶层")
+                }
                 let ch = readByte()
                 let countBytes = ArrayList<Byte>()
                 countBytes.add(ch)
                 collectRestOfLine(countBytes)
-                let count = Int64.parse(String.fromUtf8(collectArray(countBytes.iterator())))
+                let count = parseCount(
+                    String.fromUtf8(collectArray(countBytes.iterator())),
+                    "Push"
+                )
                 let items = ArrayList<RESPValue>()
                 for (_ in 0..count) {
                     items.add(readValue(depth + 1))
                 }
                 let pushVal = RESPValue.Push(collectArray(items.iterator()))
+                validateDecodedPush(pushVal)
                 dispatchPush(pushVal)
                 if (includePush) {
                     pushVal
@@ -339,7 +367,10 @@ public class RespDecoder {
                 let countBytes = ArrayList<Byte>()
                 countBytes.add(ch)
                 collectRestOfLine(countBytes)
-                let count = Int64.parse(String.fromUtf8(collectArray(countBytes.iterator())))
+                let count = parseCount(
+                    String.fromUtf8(collectArray(countBytes.iterator())),
+                    "Attribute"
+                )
                 let pairs = ArrayList<(RESPValue, RESPValue)>()
                 for (_ in 0..count) {
                     let k = readValue(depth + 1)
@@ -347,13 +378,23 @@ public class RespDecoder {
                     pairs.add((k, v))
                 }
                 let attrPairs = collectArray(pairs.iterator())
-                // 保存属性到 side channel，继续读取真实响应
-                saveAttributes(attrPairs)
-                readValue(depth)
+                if (depth == 0) {
+                    // 顶层 Attribute 是命令主响应的侧通道元数据。
+                    saveAttributes(attrPairs)
+                    readValue(depth)
+                } else {
+                    // 嵌套 Attribute 只增强紧随其后的子响应，不能丢到全局侧通道。
+                    let value = readValue(depth)
+                    RESPValue.Attributed(value, attrPairs)
+                }
 
             case b'.' =>  // End (流式终止符)
                 skipCRLF()
-                RESPValue.End
+                if (allowEnd) {
+                    RESPValue.End
+                } else {
+                    throw ProtocolError("End 标记只能作为流式聚合终止符")
+                }
 
             case _ =>
                 throw ProtocolError("未知 RESP 类型首字节: ${Int64(firstByte)}")
@@ -371,9 +412,24 @@ public class RespDecoder {
             let b = readByte()
             if (b == 0x3Bu8) {  // ';'
                 let lenStr = String.fromUtf8(readLine())
-                let len = Int64.parse(lenStr)
+                let len = parseIntText(lenStr)
+                if (len < 0) {
+                    throw ProtocolError("流式字符串分块长度 ${len} 无效")
+                }
+                if (len > maxBulkLen) {
+                    throw ProtocolError(
+                        "流式字符串分块长度 ${len} 超过最大限制 ${maxBulkLen}"
+                    )
+                }
                 if (len == 0) {
                     break  // ;0\r\n → 传输结束
+                }
+                var nextTotal: Int64 = len
+                for (c in chunks) { nextTotal += c.size }
+                if (nextTotal > maxBulkLen) {
+                    throw ProtocolError(
+                        "流式字符串总长度 ${nextTotal} 超过最大限制 ${maxBulkLen}"
+                    )
                 }
                 let chunk = readExact(len)
                 skipCRLF()
@@ -406,7 +462,7 @@ public class RespDecoder {
     private func readStreamedMap(depth: Int64): RESPValue {
         let items = ArrayList<RESPValue>()
         while (true) {
-            let val = readValue(depth + 1)
+            let val = readValue(depth + 1, includePush: false, allowEnd: true)
             match (val) {
                 case RESPValue.End => break
                 case _ => items.add(val)
@@ -430,7 +486,7 @@ public class RespDecoder {
     private func readStreamedItems(depth: Int64): Array<RESPValue> {
         let items = ArrayList<RESPValue>()
         while (true) {
-            let val = readValue(depth + 1)
+            let val = readValue(depth + 1, includePush: false, allowEnd: true)
             match (val) {
                 case RESPValue.End => break
                 case _ => items.add(val)
@@ -467,7 +523,15 @@ public class RespDecoder {
 
     /// 保存属性数据到侧通道
     private func saveAttributes(pairs: Array<(RESPValue, RESPValue)>): Unit {
-        lastAttributes = Some(pairs)
+        match (lastAttributes) {
+            case Some(existing) =>
+                let merged = ArrayList<(RESPValue, RESPValue)>()
+                for (pair in existing) { merged.add(pair) }
+                for (pair in pairs) { merged.add(pair) }
+                lastAttributes = Some(collectArray(merged.iterator()))
+            case None =>
+                lastAttributes = Some(pairs)
+        }
     }
 
     /// 获取最后一次读取中分离的属性数据
@@ -532,11 +596,78 @@ public class RespDecoder {
             case "-inf" => -Float64.Inf
             case "nan" => Float64.NaN
             case _ =>
+                if (str.contains("e") || str.contains("E")) {
+                    throw ProtocolError("浮点数禁止使用指数格式: '${str}'")
+                }
+                if (str.startsWith(".") || str.startsWith("-.") || str.startsWith("+.")) {
+                    throw ProtocolError("浮点数小数点前必须包含数字: '${str}'")
+                }
                 try {
                     Float64.parse(str)
                 } catch (e: Exception) {
                     throw ProtocolError("浮点数解析失败: '${str}'")
                 }
+        }
+    }
+
+    private func validateBigNumber(str: String): Unit {
+        if (str.size == 0) {
+            throw ProtocolError("Big Number 不能为空")
+        }
+        var start: Int64 = 0
+        if (str.startsWith("-") || str.startsWith("+")) {
+            if (str.size == 1) {
+                throw ProtocolError("Big Number 符号后必须包含数字")
+            }
+            start = 1
+        }
+        let bytes = str.toArray()
+        for (i in start..bytes.size) {
+            if (bytes[i] < 0x30u8 || bytes[i] > 0x39u8) {
+                throw ProtocolError("Big Number 只能包含十进制数字: '${str}'")
+            }
+        }
+    }
+
+    private func validateVerbatimEncodingBytes(bytes: Array<Byte>): Unit {
+        if (bytes.size != 3) {
+            throw ProtocolError("Verbatim String 编码标识必须恰好为 3 字节")
+        }
+        for (b in bytes) {
+            if (b < 0x20u8 || b > 0x7Eu8) {
+                throw ProtocolError("Verbatim String 编码标识必须为 3 个非控制 ASCII 字节")
+            }
+        }
+    }
+
+    private func parseIntText(str: String): Int64 {
+        try {
+            Int64.parse(str)
+        } catch (e: Exception) {
+            throw ProtocolError("整数解析失败: '${str}' - ${e.message}")
+        }
+    }
+
+    private func parseCount(str: String, typeName: String): Int64 {
+        let count = parseIntText(str)
+        if (count < 0) {
+            throw ProtocolError("${typeName} 元素数量 ${count} 无效")
+        }
+        count
+    }
+
+    private func validateDecodedPush(pushVal: RESPValue): Unit {
+        match (pushVal) {
+            case RESPValue.Push(items) =>
+                if (items.size == 0) {
+                    throw ProtocolError("Push 类型至少需要一个元素（push 类型标识）")
+                }
+                match (items[0]) {
+                    case RESPValue.SimpleString(_) => ()
+                    case RESPValue.BulkString(Some(_)) => ()
+                    case _ => throw ProtocolError("Push 类型的第一个元素必须为字符串类型")
+                }
+            case _ => ()
         }
     }
 }

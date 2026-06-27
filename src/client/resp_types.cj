@@ -41,6 +41,8 @@ public enum RESPValue <: ToString {
     | Push(Array<RESPValue>)
     /// 响应属性元数据，`|1\r\n+ttl\r\n:3600\r\n`
     | Attribute(Array<(RESPValue, RESPValue)>)
+    /// 携带 RESP3 Attribute 的子响应值
+    | Attributed(RESPValue, Array<(RESPValue, RESPValue)>)
 
     // -------- RESP3 流式扩展 --------
     /// 流式字符串（分块传输后拼接的完整数据）
@@ -69,6 +71,7 @@ public func isError(val: RESPValue): Bool {
     match (val) {
         case RESPValue.Error(_) => true
         case RESPValue.BulkError(_) => true
+        case RESPValue.Attributed(value, _) => isError(value)
         case _ => false
     }
 }
@@ -78,6 +81,7 @@ public func getErrorMsg(val: RESPValue): Option<String> {
     match (val) {
         case RESPValue.Error(msg) => Some(msg)
         case RESPValue.BulkError(blob) => Some(blob.toDisplay())
+        case RESPValue.Attributed(value, _) => getErrorMsg(value)
         case _ => None
     }
 }
@@ -110,6 +114,8 @@ public func respValueToString(val: RESPValue): String {
             formatPush(items)
         case RESPValue.Attribute(pairs) =>
             formatAttr(pairs)
+        case RESPValue.Attributed(value, pairs) =>
+            "${respValueToString(value)} ${formatAttr(pairs)}"
         case RESPValue.StreamedString(blob) =>
             "流式字符串(${blob.size} 字节): ${blob.toDisplay()}"
         case RESPValue.StreamedArray(items) =>
@@ -132,6 +138,8 @@ public func asBlob(val: RESPValue): Option<Blob> {
         case RESPValue.BulkString(v) => v
         case RESPValue.SimpleString(s) => Some(Blob.fromUtf8(s))
         case RESPValue.VerbatimString(_, blob) => Some(blob)
+        case RESPValue.StreamedString(blob) => Some(blob)
+        case RESPValue.Attributed(value, _) => asBlob(value)
         case _ => None
     }
 }
@@ -142,7 +150,10 @@ public func asString(val: RESPValue): Option<String> {
         case RESPValue.SimpleString(s) => Some(s)
         case RESPValue.BulkString(Some(blob)) =>
             try { Some(blob.toUtf8()) } catch (_) { None }
+        case RESPValue.StreamedString(blob) =>
+            try { Some(blob.toUtf8()) } catch (_) { None }
         case RESPValue.Integer(n) => Some("${n}")
+        case RESPValue.Attributed(value, _) => asString(value)
         case _ => None
     }
 }
@@ -153,6 +164,7 @@ public func asInt(val: RESPValue): Option<Int64> {
         case RESPValue.Integer(n) => Some(n)
         case RESPValue.BulkString(Some(blob)) =>
             try { Some(Int64.parse(blob.toUtf8())) } catch (_) { None }
+        case RESPValue.Attributed(value, _) => asInt(value)
         case _ => None
     }
 }

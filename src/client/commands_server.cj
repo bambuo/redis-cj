@@ -481,6 +481,38 @@ extend RedisClient {
         expectStringArray(executeString(["MODULE", "HELP"]), "MODULE HELP")
     }
 
+    public func moduleLoad(path: String, args!: Array<String> = []): Unit {
+        let command = ArrayList<String>()
+        command.add("MODULE")
+        command.add("LOAD")
+        command.add(path)
+        for (arg in args) { command.add(arg) }
+        expectOK(executeString(collectArray(command.iterator())), "MODULE LOAD")
+    }
+
+    public func moduleLoadEx(path: String,
+                             configs!: Array<(String, String)> = [],
+                             args!: Array<String> = []): Unit {
+        let command = ArrayList<String>()
+        command.add("MODULE")
+        command.add("LOADEX")
+        command.add(path)
+        for ((name, value) in configs) {
+            command.add("CONFIG")
+            command.add(name)
+            command.add(value)
+        }
+        if (args.size > 0) {
+            command.add("ARGS")
+            for (arg in args) { command.add(arg) }
+        }
+        expectOK(executeString(collectArray(command.iterator())), "MODULE LOADEX")
+    }
+
+    public func moduleUnload(name: String): Unit {
+        expectOK(executeString(["MODULE", "UNLOAD", name]), "MODULE UNLOAD")
+    }
+
     // -------- ACL --------
 
     /// 列出 ACL 规则

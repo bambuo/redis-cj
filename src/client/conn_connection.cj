@@ -17,18 +17,24 @@ public class RedisConnection <: Resource {
     private var protoVersion: Int64
     private var connectTimeout: Option<Duration>
     private var autoHello: Bool
+    private var authUsername: Option<String>
+    private var authPassword: Option<String>
     private var lastAttributes: Option<Array<(RESPValue, RESPValue)>>
     private let lock: Mutex
 
     public init(transport: Transport,
                 autoHello!: Bool = true,
-                connectTimeout!: Option<Duration> = None) {
+                connectTimeout!: Option<Duration> = None,
+                authUsername!: Option<String> = None,
+                authPassword!: Option<String> = None) {
         this.transport = transport
         this.decoder = RespDecoder(transport)
         this.state = ConnectionState.New
         this.protoVersion = 2
         this.autoHello = autoHello
         this.connectTimeout = connectTimeout
+        this.authUsername = authUsername
+        this.authPassword = authPassword
         this.lastAttributes = None
         this.lock = Mutex()
     }
@@ -113,10 +119,20 @@ public class RedisConnection <: Resource {
     // ====================================================================
 
     private func negotiateProtocol(): Unit {
-        let helloArgs: Array<Blob> = [
-            Blob.fromUtf8("HELLO"),
-            Blob.fromUtf8("3"),
-        ]
+        let args = ArrayList<Blob>()
+        args.add(Blob.fromUtf8("HELLO"))
+        args.add(Blob.fromUtf8("3"))
+        match (authPassword) {
+            case Some(password) =>
+                args.add(Blob.fromUtf8("AUTH"))
+                args.add(Blob.fromUtf8(match (authUsername) {
+                    case Some(username) => username
+                    case None => "default"
+                }))
+                args.add(Blob.fromUtf8(password))
+            case None => ()
+        }
+        let helloArgs = collectArray(args.iterator())
 
         try {
             let resp = sendRawCommand(helloArgs)
@@ -127,9 +143,11 @@ public class RedisConnection <: Resource {
                 case RESPValue.Error(msg) =>
                     if (msg.startsWith("NOPROTO")) {
                         protoVersion = 2
+                        authenticateResp2Fallback()
                         println("协议协商: 服务器不支持 RESP3，使用 RESP2")
                     } else if (msg.contains("unknown command")) {
                         protoVersion = 2
+                        authenticateResp2Fallback()
                         println("协议协商: 旧版 Redis，使用 RESP2")
                     } else {
                         throw ProtocolError("HELLO 协商失败: ${msg}")
@@ -140,6 +158,29 @@ public class RedisConnection <: Resource {
         } catch (e: ConnectionError) {
             protoVersion = 2
             println("协议协商: HELLO 不可用，使用 RESP2")
+        }
+    }
+
+    private func authenticateResp2Fallback(): Unit {
+        match (authPassword) {
+            case Some(password) =>
+                let args = ArrayList<Blob>()
+                args.add(Blob.fromUtf8("AUTH"))
+                match (authUsername) {
+                    case Some(username) =>
+                        args.add(Blob.fromUtf8(username))
+                        args.add(Blob.fromUtf8(password))
+                    case None =>
+                        args.add(Blob.fromUtf8(password))
+                }
+                let resp = sendRawCommand(collectArray(args.iterator()))
+                match (resp) {
+                    case RESPValue.SimpleString(_) => ()
+                    case RESPValue.Error(msg) => throw createCommandError(msg)
+                    case RESPValue.BulkError(blob) => throw createCommandError(blob.toUtf8())
+                    case _ => throw ProtocolError("AUTH 返回意外类型")
+                }
+            case None => ()
         }
     }
 

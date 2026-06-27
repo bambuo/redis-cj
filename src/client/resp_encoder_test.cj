@@ -131,6 +131,18 @@ class EncoderTests {
         }
     }
 
+    /// 编码普通 BulkError exact bytes
+    @TestCase
+    func encodeBulkErrorExactBytes() {
+        let val = RESPValue.BulkError(Blob.fromUtf8("SYNTAX invalid syntax"))
+        let encoded = RespEncoder.encodeValue(val)
+        let expected = Blob.fromUtf8("!21\r\nSYNTAX invalid syntax\r\n").toBytes()
+        @Expect(encoded.size, expected.size)
+        for (i in 0..encoded.size) {
+            @Expect(encoded[i], expected[i])
+        }
+    }
+
     /// 编码 Null Array
     @TestCase
     func encodeNullArray() {
@@ -184,15 +196,10 @@ class EncoderTests {
         @Expect(f[1], 0x66u8)  // 'f'
     }
 
-    /// 编码 End 标记
+    /// 顶层编码 End 标记应抛异常
     @TestCase
-    func encodeEnd() {
-        let val = RESPValue.End
-        let encoded = RespEncoder.encodeValue(val)
-        @Expect(encoded.size, 3)
-        @Expect(encoded[0], 0x2Eu8)  // '.'
-        @Expect(encoded[1], 0x0Du8)  // '\r'
-        @Expect(encoded[2], 0x0Au8)  // '\n'
+    func encodeTopLevelEndThrows() {
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(RESPValue.End))
     }
 
     /// 编码 Double (RESP3)
@@ -283,6 +290,55 @@ class EncoderTests {
         @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
     }
 
+    /// 编码 VerbatimString 编码标识含非 ASCII 字节应抛异常
+    @TestCase
+    func encodeVerbatimStringNonAsciiEncodingThrows() {
+        let val = RESPValue.VerbatimString("中", Blob.fromUtf8("data"))
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 编码 VerbatimString 编码标识含控制字符应抛异常
+    @TestCase
+    func encodeVerbatimStringControlEncodingThrows() {
+        let val = RESPValue.VerbatimString("t\nt", Blob.fromUtf8("data"))
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 固定 Array 内编码 End 标记应抛异常
+    @TestCase
+    func encodeFixedArrayEndThrows() {
+        let val = RESPValue.Array(Some([RESPValue.End]))
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 固定 Map 内编码 End 标记应抛异常
+    @TestCase
+    func encodeFixedMapEndThrows() {
+        let val = RESPValue.Map([(RESPValue.End, RESPValue.Integer(1))])
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 固定 Set 内编码 End 标记应抛异常
+    @TestCase
+    func encodeFixedSetEndThrows() {
+        let val = RESPValue.Set([RESPValue.End])
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 编码 BigNumber 含非数字字符应抛异常
+    @TestCase
+    func encodeBigNumberInvalidThrows() {
+        let val = RESPValue.BigNumber("12x3")
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
+    /// 编码 BigNumber 含 CRLF 应抛异常
+    @TestCase
+    func encodeBigNumberWithCRLFThrows() {
+        let val = RESPValue.BigNumber("123\r\n456")
+        @ExpectThrows[ProtocolError](RespEncoder.encodeValue(val))
+    }
+
     /// 编码 Push 首元素非字符串应抛异常
     @TestCase
     func encodePushInvalidFirstElementThrows() {
@@ -338,6 +394,66 @@ class EncoderTests {
         let encoded = String.fromUtf8(RespEncoder.encodeValue(val))
         @Expect(encoded.startsWith("%?\r\n"), true)
         @Expect(encoded.endsWith(".\r\n"), true)
+    }
+
+    /// 编码普通 Map exact bytes
+    @TestCase
+    func encodeMapExactBytes() {
+        let val = RESPValue.Map([
+            (RESPValue.SimpleString("first"), RESPValue.Integer(1)),
+            (RESPValue.SimpleString("second"), RESPValue.Integer(2)),
+        ])
+        let encoded = RespEncoder.encodeValue(val)
+        let expected = Blob.fromUtf8("%2\r\n+first\r\n:1\r\n+second\r\n:2\r\n").toBytes()
+        @Expect(encoded.size, expected.size)
+        for (i in 0..encoded.size) {
+            @Expect(encoded[i], expected[i])
+        }
+    }
+
+    /// 编码普通 Set exact bytes
+    @TestCase
+    func encodeSetExactBytes() {
+        let val = RESPValue.Set([
+            RESPValue.SimpleString("a"),
+            RESPValue.SimpleString("b"),
+        ])
+        let encoded = RespEncoder.encodeValue(val)
+        let expected = Blob.fromUtf8("~2\r\n+a\r\n+b\r\n").toBytes()
+        @Expect(encoded.size, expected.size)
+        for (i in 0..encoded.size) {
+            @Expect(encoded[i], expected[i])
+        }
+    }
+
+    /// 编码普通 Attribute exact bytes
+    @TestCase
+    func encodeAttributeExactBytes() {
+        let val = RESPValue.Attribute([
+            (RESPValue.SimpleString("ttl"), RESPValue.Integer(3600)),
+        ])
+        let encoded = RespEncoder.encodeValue(val)
+        let expected = Blob.fromUtf8("|1\r\n+ttl\r\n:3600\r\n").toBytes()
+        @Expect(encoded.size, expected.size)
+        for (i in 0..encoded.size) {
+            @Expect(encoded[i], expected[i])
+        }
+    }
+
+    /// 编码普通 Push exact bytes
+    @TestCase
+    func encodePushExactBytes() {
+        let val = RESPValue.Push([
+            RESPValue.SimpleString("message"),
+            RESPValue.SimpleString("ch"),
+            RESPValue.SimpleString("hello"),
+        ])
+        let encoded = RespEncoder.encodeValue(val)
+        let expected = Blob.fromUtf8(">3\r\n+message\r\n+ch\r\n+hello\r\n").toBytes()
+        @Expect(encoded.size, expected.size)
+        for (i in 0..encoded.size) {
+            @Expect(encoded[i], expected[i])
+        }
     }
 
     /// 编码常规 VerbatimString（正常情况）

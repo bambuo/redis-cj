@@ -9,8 +9,7 @@ class SlotMapTests {
     func crc16KnownValue() {
         // crc16 是私有函数，通 SlotMap.getSlot 间接测试
         let slot1 = SlotMap.getSlot("123456789")
-        @Expect(slot1 >= 0, true)
-        @Expect(slot1 < 16384, true)
+        @Expect(slot1, 12739)
     }
 
     /// 相同 key 的槽位一致
@@ -54,6 +53,127 @@ class SlotMapTests {
         // user123 和 user456 可能不同槽位
         // 无法断言不等，但可断言两者有效
         @Expect(slot3 >= 0 && slot3 < 16384, true)
+    }
+
+    /// 空 hash tag 回退整 key，右括号在左括号前时继续寻找合法 tag
+    @TestCase
+    func hashTagBoundaryCases() {
+        @Expect(SlotMap.getSlot("foo{}{bar}"), 8363)
+        @Expect(SlotMap.getSlot("foo}bar{zap}"), SlotMap.getSlot("zap"))
+    }
+
+    /// 集群路由抽取覆盖集合 store 命令
+    @TestCase
+    func clusterRoutingKeysForSetStoreCommands() {
+        let keys = extractClusterRoutingKeys(stringsToBlobs(["SINTERSTORE", "{u}:dst", "{u}:a", "{u}:b"]))
+        @Expect(keys.size, 3)
+        @Expect(keys[0], "{u}:dst")
+        @Expect(keys[1], "{u}:a")
+        @Expect(keys[2], "{u}:b")
+    }
+
+    /// 集群路由抽取覆盖 SINTERCARD numkeys 形态
+    @TestCase
+    func clusterRoutingKeysForSInterCard() {
+        let keys = extractClusterRoutingKeys(stringsToBlobs(["SINTERCARD", "2", "{u}:a", "{u}:b", "LIMIT", "1"]))
+        @Expect(keys.size, 2)
+        @Expect(keys[0], "{u}:a")
+        @Expect(keys[1], "{u}:b")
+    }
+
+    /// 集群路由抽取覆盖 BITOP destination + source keys
+    @TestCase
+    func clusterRoutingKeysForBitop() {
+        let keys = extractClusterRoutingKeys(stringsToBlobs(["BITOP", "AND", "{u}:dst", "{u}:a", "{u}:b"]))
+        @Expect(keys.size, 3)
+        @Expect(keys[0], "{u}:dst")
+        @Expect(keys[1], "{u}:a")
+        @Expect(keys[2], "{u}:b")
+    }
+
+    /// 集群路由抽取覆盖 store/source 双 key 形态
+    @TestCase
+    func clusterRoutingKeysForStoreSourceCommands() {
+        let zkeys = extractClusterRoutingKeys(stringsToBlobs(["ZRANGESTORE", "{u}:dst", "{u}:src", "0", "1"]))
+        @Expect(zkeys.size, 2)
+        @Expect(zkeys[0], "{u}:dst")
+        @Expect(zkeys[1], "{u}:src")
+
+        let geokeys = extractClusterRoutingKeys(
+            stringsToBlobs(["GEOSEARCHSTORE", "{u}:dst", "{u}:src", "FROMLONLAT", "0", "0", "BYRADIUS", "1", "km"])
+        )
+        @Expect(geokeys.size, 2)
+        @Expect(geokeys[0], "{u}:dst")
+        @Expect(geokeys[1], "{u}:src")
+    }
+
+    /// 集群路由抽取覆盖 LCS 双 key
+    @TestCase
+    func clusterRoutingKeysForLcs() {
+        let keys = extractClusterRoutingKeys(stringsToBlobs(["LCS", "{u}:a", "{u}:b", "LEN"]))
+        @Expect(keys.size, 2)
+        @Expect(keys[0], "{u}:a")
+        @Expect(keys[1], "{u}:b")
+    }
+
+    /// 集群路由抽取覆盖 OBJECT 子命令 key，HELP 无 key
+    @TestCase
+    func clusterRoutingKeysForObjectCommands() {
+        let keys = extractClusterRoutingKeys(stringsToBlobs(["OBJECT", "ENCODING", "{u}:key"]))
+        @Expect(keys.size, 1)
+        @Expect(keys[0], "{u}:key")
+
+        let helpKeys = extractClusterRoutingKeys(stringsToBlobs(["OBJECT", "HELP"]))
+        @Expect(helpKeys.size, 0)
+    }
+
+    /// 集群路由抽取覆盖 MEMORY USAGE key，其它 MEMORY 管理命令无 key
+    @TestCase
+    func clusterRoutingKeysForMemoryCommands() {
+        let keys = extractClusterRoutingKeys(stringsToBlobs(["MEMORY", "USAGE", "{u}:key", "SAMPLES", "0"]))
+        @Expect(keys.size, 1)
+        @Expect(keys[0], "{u}:key")
+
+        let statsKeys = extractClusterRoutingKeys(stringsToBlobs(["MEMORY", "STATS"]))
+        @Expect(statsKeys.size, 0)
+    }
+
+    /// 集群路由抽取覆盖 SORT source + STORE destination
+    @TestCase
+    func clusterRoutingKeysForSortStore() {
+        let keys = extractClusterRoutingKeys(
+            stringsToBlobs(["SORT", "{u}:src", "BY", "weight_*", "GET", "#", "STORE", "{u}:dst"])
+        )
+        @Expect(keys.size, 2)
+        @Expect(keys[0], "{u}:src")
+        @Expect(keys[1], "{u}:dst")
+    }
+
+    /// 集群路由抽取覆盖 MIGRATE 单 key 和 KEYS 列表
+    @TestCase
+    func clusterRoutingKeysForMigrate() {
+        let single = extractClusterRoutingKeys(
+            stringsToBlobs(["MIGRATE", "127.0.0.1", "6380", "{u}:key", "0", "5000", "COPY"])
+        )
+        @Expect(single.size, 1)
+        @Expect(single[0], "{u}:key")
+
+        let keys = extractClusterRoutingKeys(
+            stringsToBlobs(["MIGRATE", "127.0.0.1", "6380", "", "0", "5000", "KEYS", "{u}:a", "{u}:b"])
+        )
+        @Expect(keys.size, 2)
+        @Expect(keys[0], "{u}:a")
+        @Expect(keys[1], "{u}:b")
+    }
+
+    /// 集群路由抽取覆盖 SCRIPT/FUNCTION 管理子命令无 key
+    @TestCase
+    func clusterRoutingKeysForScriptAndFunctionManagement() {
+        let scriptKeys = extractClusterRoutingKeys(stringsToBlobs(["SCRIPT", "LOAD", "return 1"]))
+        @Expect(scriptKeys.size, 0)
+
+        let functionKeys = extractClusterRoutingKeys(stringsToBlobs(["FUNCTION", "DELETE", "libname"]))
+        @Expect(functionKeys.size, 0)
     }
 
     /// CRC16 算法在 Redis 集群中的已知值

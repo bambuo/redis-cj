@@ -220,6 +220,20 @@ class DecoderTests {
         }
     }
 
+    /// Double 指数格式应抛异常
+    @TestCase
+    func decodeDoubleExponentialThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8(",1e3\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// Double 小数点前缺少数字应抛异常
+    @TestCase
+    func decodeDoubleMissingLeadingZeroThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8(",.5\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
     /// 解码 Big Number
     @TestCase
     func decodeBigNumber() {
@@ -229,6 +243,13 @@ class DecoderTests {
             case RESPValue.BigNumber(s) => @Expect(s.startsWith("34928903284"), true)
             case _ => @Fail("期望 BigNumber")
         }
+    }
+
+    /// Big Number 含非数字字符应抛异常
+    @TestCase
+    func decodeBigNumberInvalidThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8("(12.3\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
     }
 
     /// 解码 Bulk Error
@@ -257,6 +278,75 @@ class DecoderTests {
         }
     }
 
+    /// Verbatim String 缺少 ':' 分隔符应抛异常
+    @TestCase
+    func decodeVerbatimStringMissingColonThrows() {
+        let data = Blob.fromUtf8("=5\r\ntxtx\r\n").toBytes()
+        let dec = decoderFromBytes(data)
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// Verbatim String 编码标识含非 ASCII 字节应抛异常
+    @TestCase
+    func decodeVerbatimStringNonAsciiEncodingThrows() {
+        let data: Array<Byte> = [
+            0x3D, 0x34, 0x0D, 0x0A,  // =4\r\n
+            0xE4, 0xB8, 0xAD, 0x3A,  // 非 ASCII 编码标识 + ':'
+            0x0D, 0x0A,
+        ]
+        let dec = decoderFromBytes(data)
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// Verbatim String 编码标识含控制字符应抛异常
+    @TestCase
+    func decodeVerbatimStringControlEncodingThrows() {
+        let data: Array<Byte> = [
+            0x3D, 0x34, 0x0D, 0x0A,  // =4\r\n
+            0x74, 0x0A, 0x74, 0x3A,  // t\nt:
+            0x0D, 0x0A,
+        ]
+        let dec = decoderFromBytes(data)
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// 顶层 Attribute 存入侧通道并返回主响应
+    @TestCase
+    func decodeTopLevelAttributeSideChannel() {
+        let data = Blob.fromUtf8("|1\r\n+ttl\r\n:3600\r\n+OK\r\n").toBytes()
+        let dec = decoderFromBytes(data)
+        let val = dec.readValue()
+        match (val) {
+            case RESPValue.SimpleString(s) => @Expect(s, "OK")
+            case _ => @Fail("期望主响应 SimpleString")
+        }
+        match (dec.getAttributes()) {
+            case Some(attrs) => @Expect(attrs.size, 1)
+            case None => @Fail("期望 Attribute 侧通道")
+        }
+    }
+
+    /// 嵌套 Attribute 应跟随其增强的子响应
+    @TestCase
+    func decodeNestedAttributePreserved() {
+        let data = Blob.fromUtf8("*1\r\n|1\r\n+ttl\r\n:3600\r\n:3\r\n").toBytes()
+        let dec = decoderFromBytes(data)
+        let val = dec.readValue()
+        match (val) {
+            case RESPValue.Array(Some(items)) =>
+                match (items[0]) {
+                    case RESPValue.Attributed(value, attrs) =>
+                        @Expect(attrs.size, 1)
+                        match (value) {
+                            case RESPValue.Integer(n) => @Expect(n, 3)
+                            case _ => @Fail("期望被增强的 Integer")
+                        }
+                    case _ => @Fail("期望嵌套 Attributed")
+                }
+            case _ => @Fail("期望 Array")
+        }
+    }
+
     // -------- 流式类型 --------
 
     /// 解码流式字符串 $?...;0\r\n
@@ -274,15 +364,32 @@ class DecoderTests {
         }
     }
 
-    /// 解码 End 标记
+    /// 顶层 End 标记应抛异常
     @TestCase
-    func decodeEnd() {
+    func decodeTopLevelEndThrows() {
         let dec = decoderFromBytes([0x2Eu8, 0x0Du8, 0x0Au8])  // .\r\n
-        let val = dec.readValue()
-        match (val) {
-            case RESPValue.End => ()
-            case _ => @Fail("期望 End")
-        }
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// 固定 Array 内 End 标记应抛异常
+    @TestCase
+    func decodeFixedArrayEndThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8("*1\r\n.\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// 固定 Map 内 End 标记应抛异常
+    @TestCase
+    func decodeFixedMapEndThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8("%1\r\n.\r\n:1\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// 固定 Set 内 End 标记应抛异常
+    @TestCase
+    func decodeFixedSetEndThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8("~1\r\n.\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
     }
 
     /// 解码流式数组 *?\r\n...\r\n.\r\n
@@ -337,6 +444,27 @@ class DecoderTests {
     func decodeStreamedMapOddElements() {
         let data = Blob.fromUtf8("%?\r\n+k1\r\n:1\r\n+k2\r\n.\r\n").toBytes()
         let dec = decoderFromBytes(data)
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// Map 负元素数量应抛异常
+    @TestCase
+    func decodeNegativeMapCountThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8("%-1\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// Push 首元素必须为字符串
+    @TestCase
+    func decodePushFirstElementMustBeString() {
+        let dec = decoderFromBytes(Blob.fromUtf8(">1\r\n:1\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValueIncludingPush())
+    }
+
+    /// Push 只能作为顶层带外数据出现
+    @TestCase
+    func decodeNestedPushThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8("*1\r\n>3\r\n+message\r\n+ch\r\n+hello\r\n").toBytes())
         @ExpectThrows[ProtocolError](dec.readValue())
     }
 
@@ -400,11 +528,43 @@ class DecoderTests {
         @ExpectThrows[ProtocolError](dec.readValue())
     }
 
+    /// SimpleString 行内裸 LF 应抛异常
+    @TestCase
+    func simpleStringBareLFThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8("+hello\nworld\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// Error 行内裸 LF 应抛异常
+    @TestCase
+    func errorBareLFThrows() {
+        let dec = decoderFromBytes(Blob.fromUtf8("-ERR bad\nthing\r\n").toBytes())
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
     /// 超大 Bulk String 应被拒绝
     @TestCase
     func maxBulkLenExceeded() {
         let transport = MockTransport(Blob.fromUtf8("$999999999\r\n").toBytes())
         let dec = RespDecoder(transport, maxBulkLen: 1024, maxDepth: 10)
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// 流式字符串单个分块超过最大长度应被拒绝
+    @TestCase
+    func streamedStringChunkExceedsMaxBulkLenThrows() {
+        let transport = MockTransport(Blob.fromUtf8("$?\r\n;5\r\nHello\r\n;0\r\n").toBytes())
+        let dec = RespDecoder(transport, maxBulkLen: 4, maxDepth: 10)
+        @ExpectThrows[ProtocolError](dec.readValue())
+    }
+
+    /// 流式字符串累计长度超过最大长度应被拒绝
+    @TestCase
+    func streamedStringTotalExceedsMaxBulkLenThrows() {
+        let transport = MockTransport(
+            Blob.fromUtf8("$?\r\n;3\r\nHel\r\n;3\r\nlo!\r\n;0\r\n").toBytes()
+        )
+        let dec = RespDecoder(transport, maxBulkLen: 5, maxDepth: 10)
         @ExpectThrows[ProtocolError](dec.readValue())
     }
 

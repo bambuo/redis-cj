@@ -33,8 +33,10 @@ extend RedisClient {
                     }
                 }
                 connection.setState(ConnectionState.Subscribed)
+                consumeSubscriptionAcks(channels.size - 1)
             case RESPValue.Push(_) =>
                 connection.setState(ConnectionState.Subscribed)
+                consumeSubscriptionAcks(channels.size - 1)
             case RESPValue.Error(e) => throw createCommandError(e)
             case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
             case _ => ()
@@ -84,7 +86,9 @@ extend RedisClient {
         match (resp) {
             case RESPValue.Error(e) => throw createCommandError(e)
             case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
-            case _ => connection.setState(ConnectionState.Subscribed)
+            case _ =>
+                connection.setState(ConnectionState.Subscribed)
+                consumeSubscriptionAcks(patterns.size - 1)
         }
     }
 
@@ -126,9 +130,9 @@ extend RedisClient {
                                         case _ => ()
                                     }
                                 case Some("pmessage") =>
-                                    if (items.size >= 4) {
-                                        let channel = asBlob(items[2])
-                                        let message = asBlob(items[3])
+                                    if (items.size >= 5) {
+                                        let channel = asBlob(items[3])
+                                        let message = asBlob(items[4])
                                         match ((channel, message)) {
                                             case (Some(ch), Some(msg)) => handler(ch, msg)
                                             case _ => ()
@@ -164,6 +168,53 @@ extend RedisClient {
     /// 阻塞读取下一条 Pub/Sub Push 帧，并触发已注册的回调。
     public func readPubSubMessage(): RESPValue {
         connection.readNextPush()
+    }
+
+    public func monitor(): Unit {
+        let resp = connection.executeReturningPush([Blob.fromUtf8("MONITOR")])
+        match (resp) {
+            case RESPValue.SimpleString("OK") =>
+                connection.setState(ConnectionState.Subscribed)
+            case RESPValue.Push(_) =>
+                connection.setState(ConnectionState.Subscribed)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("MONITOR 返回意外类型")
+        }
+    }
+
+    public func readMonitorMessage(): String {
+        match (connection.readNextPush()) {
+            case RESPValue.SimpleString(s) => s
+            case RESPValue.BulkString(Some(blob)) => blob.toUtf8()
+            case RESPValue.Push(items) =>
+                parseMonitorPush(items)
+            case RESPValue.Error(e) => throw createCommandError(e)
+            case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
+            case _ => throw ProtocolError("MONITOR 推送返回意外类型")
+        }
+    }
+
+    private func consumeSubscriptionAcks(count: Int64): Unit {
+        var remaining = count
+        while (remaining > 0) {
+            connection.readNextPush()
+            remaining--
+        }
+    }
+
+    private func parseMonitorPush(items: Array<RESPValue>): String {
+        if (items.size >= 2) {
+            match (asString(items[0])) {
+                case Some("monitor") =>
+                    match (asString(items[1])) {
+                        case Some(s) => return s
+                        case None => ()
+                    }
+                case _ => ()
+            }
+        }
+        respValueToString(RESPValue.Push(items))
     }
 
     // -------- PUBSUB 内省 --------
@@ -305,7 +356,9 @@ extend RedisClient {
         match (resp) {
             case RESPValue.Error(e) => throw createCommandError(e)
             case RESPValue.BulkError(e) => throw createCommandError(e.toUtf8())
-            case _ => connection.setState(ConnectionState.Subscribed)
+            case _ =>
+                connection.setState(ConnectionState.Subscribed)
+                consumeSubscriptionAcks(channels.size - 1)
         }
     }
 
