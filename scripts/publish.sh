@@ -1,32 +1,69 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# 自动生成版本号：1.0.YYYYMMDD[-N]
-today=$(date +%Y%m%d)
-today_prefix="1.0.${today}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 读取当前版本号
-current_version=$(sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' cjpm.toml)
+usage() {
+    cat <<'EOF'
+Usage:
+  scripts/publish.sh generate-version [options...]
+  scripts/publish.sh tag [options...]
+  scripts/publish.sh build TAG [options...]
+  scripts/publish.sh push TAG [options...]
+  scripts/publish.sh all TAG
 
-# 判断当日是否已发布过
-if echo "$current_version" | grep -q "^${today_prefix}"; then
-    # 提取后缀次数
-    suffix=${current_version#${today_prefix}}
-    if [ -z "$suffix" ]; then
-        count=2
-        new_version="${today_prefix}-${count}"
-    else
-        count=$(( ${suffix#*-} + 1 ))
-        new_version="${today_prefix}-${count}"
-    fi
-else
-    new_version="${today_prefix}"
+Subcommands:
+  generate-version  Delegate to scripts/generate_version.sh.
+  tag               Delegate to scripts/git_tag.sh.
+  build             Delegate to scripts/build_release_from_tag.sh.
+  push              Delegate to scripts/push_central.sh.
+  all               Build release artifacts from TAG, then publish TAG.
+
+Typical flow:
+  scripts/generate_version.sh --write
+  scripts/git_tag.sh --commit-version
+  scripts/build_release_from_tag.sh v1.0.YYYYMMDD
+  scripts/push_central.sh v1.0.YYYYMMDD
+EOF
+}
+
+if [ "$#" -eq 0 ]; then
+    usage >&2
+    exit 1
 fi
 
-# 更新 cjpm.toml 中的版本号
-sed -i '' "s/^\([[:space:]]*version[[:space:]]*=[[:space:]]*\)\"[^\"]*\"/\\1\"${new_version}\"/" cjpm.toml
+command="$1"
+shift
 
-echo "版本号: ${new_version}"
-
-cjpm build
-cjpm bundle --skip-test --skip-lint
-cjpm publish
+case "${command}" in
+    generate-version)
+        "${script_dir}/generate_version.sh" "$@"
+        ;;
+    tag)
+        "${script_dir}/git_tag.sh" "$@"
+        ;;
+    build)
+        "${script_dir}/build_release_from_tag.sh" "$@"
+        ;;
+    push)
+        "${script_dir}/push_central.sh" "$@"
+        ;;
+    all)
+        if [ "$#" -lt 1 ]; then
+            echo "all 子命令缺少 TAG 参数" >&2
+            usage >&2
+            exit 1
+        fi
+        tag_name="$1"
+        "${script_dir}/build_release_from_tag.sh" "${tag_name}"
+        "${script_dir}/push_central.sh" "${tag_name}"
+        ;;
+    -h|--help)
+        usage
+        ;;
+    *)
+        echo "未知子命令: ${command}" >&2
+        usage >&2
+        exit 1
+        ;;
+esac
